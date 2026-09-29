@@ -1,0 +1,29 @@
+# Scheduled YouTube lookups. Copy to watches.yaml and edit.
+#
+# Each watch searches YouTube on a schedule, and for every video it has not
+# seen before: fetches the transcript, saves it as Markdown, summarizes it,
+# and emails one digest per run.
+#
+# Schedule: either `every` (e.g. 30m, 6h, 1d) or `cron` (5-field crontab
+# expression, evaluated in `timezone`, default UTC).
+
+watches:
+  - name: ai-news
+    query: "AI news this week"
+    every: 6h
+    max_results: 5
+    # Only consider videos published within this window (default: 7d)
+    lookback: 2d
+    # Optional YouTube search filters
+    order: date            # date | relevance | viewCount | rating
+    # channel_id: UCxxxxxxxxxxxxxxxxxxxxxx
+    # min_duration: medium  # any | short (<4m) | medium (4-20m) | long (>20m)
+
+  - name: python-talks
+    query: "PyCon talk"
+    cron: "0 7 * * 1"      # Mondays at 07:00
+    timezone: America/New_York
+    max_results: 3
+    lookback: 7d
+    # Override recipients for this watch only
+    # email_to: [team@example.com]
