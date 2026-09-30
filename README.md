@@ -1,121 +1,163 @@
 # transcript-extractor
 
-A command-line app that:
+A small self-hosted web app that saves YouTube transcripts into your Obsidian vault.
 
-- accepts YouTube URLs (watch, `youtu.be`, Shorts, embed, live, or a bare video ID)
-- searches YouTube by keyword
-- runs **scheduled watches** that look for new videos on a regular basis
-- fetches each video's transcript
-- saves the transcript as a Markdown file, with timestamps that link back into the video
-- summarizes the video with Claude and emails the summary (the `.md` file is attached)
+- **Transcripts page:** paste one or more YouTube links (watch, `youtu.be`, Shorts, live) to save their transcripts
+- **Search:** find videos by keyword, tick the ones you want, and save them
+- **Schedules:** keyword searches that run automatically (every N hours, daily at a set time, or a cron expression) and save any videos you don't have yet
+- **Claude routine:** builds a prompt for a scheduled task in the Claude desktop app, which summarises the new notes in your vault and emails you a digest
 
-## Setup
+The app does **not** summarise anything itself. Every note it writes is marked
+`summary_status: pending`, and your Claude routine picks those up.
+
+```
+ server / NAS                         your computer
+┌──────────────────────┐   sync    ┌─────────────────────────────────────┐
+│ transcript-extractor │ ────────▶ │ Obsidian vault / YouTube/*.md        │
+│  (web UI, schedules) │           │        ▲                             │
+└──────────────────────┘           │        │ reads + writes summaries    │
+                                   │ Claude desktop scheduled task ──────┼──▶ Gmail digest
+                                   └─────────────────────────────────────┘
+```
+
+## Notes it writes
+
+`<vault>/YouTube/2026-09-30 Video title.md`:
+
+```markdown
+---
+title: Video title
+channel: Channel name
+url: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+video_id: dQw4w9WgXcQ
+published: '2026-09-30'
+saved: '2026-09-30T08:00:00Z'
+language: en
+auto_generated: true
+source: 'watch: AI news'
+summary_status: pending
+tags:
+- youtube
+- transcript
+---
+
+# Video title
+
+![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+
+**Channel:** Channel name · **Published:** 2026-09-30 · **Transcript:** English (auto-generated)
+
+## Summary
+
+<!-- summary:pending -->
+
+## Transcript
+
+**[00:00](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0s)** First minute of speech…
+**[01:02](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=62s)** Next minute…
+```
+
+The `![](…)` line shows the video as an embedded player in Obsidian. The routine
+replaces `<!-- summary:pending -->` (invisible in reading view) with the summary and sets
+`summary_status: done`, so you can list outstanding notes with a Dataview query or
+a Bases filter on that property.
+
+The app remembers every video it has handled in its own database, so moving,
+renaming or deleting notes in your vault never causes a video to be re-saved.
+
+## Running it on a server or NAS (Docker)
+
+```bash
+git clone https://github.com/the-games-guy/transcript-extractor.git
+cd transcript-extractor
+cp .env.example .env          # set YOUTUBE_API_KEY, APP_PASSWORD, APP_TIMEZONE, OBSIDIAN_VAULT_NAME
+mkdir -p vault data           # create these yourself so they aren't owned by root
+docker compose up -d --build
+```
+
+Then open `http://<server>:8000` and log in with `APP_USERNAME` / `APP_PASSWORD`.
+
+`docker-compose.yml` mounts two folders:
+
+| Mount | What |
+|---|---|
+| `./vault` → `/vault` | Where notes are written (inside `NOTES_FOLDER`, default `YouTube`). Point this at the folder you sync to your computer. |
+| `./data` → `/data` | The app's SQLite database (schedules, history). |
+
+Set `user:` in the compose file to your NAS user's UID:GID so the files aren't owned by root.
+
+### Without Docker
 
 Requires Python 3.10+.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
-cp .env.example .env              # then fill in your keys
-cp watches.example.yaml watches.yaml
+pip install .
+cp .env.example .env
+transcript-extractor          # serves on HOST:PORT (default 0.0.0.0:8000 from .env)
 ```
 
-| Setting | Used for | Where to get it |
+### Settings
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Summaries | <https://console.anthropic.com/> |
-| `YOUTUBE_API_KEY` | Keyword search and watches | Google Cloud Console → enable **YouTube Data API v3** → create an API key |
-| `SMTP_*`, `EMAIL_FROM`, `EMAIL_TO` | Sending email | For Gmail: `smtp.gmail.com`, port 587, and an [App Password](https://myaccount.google.com/apppasswords) |
+| `YOUTUBE_API_KEY` | — | Needed for Search and Schedules (not for pasted links). Google Cloud Console → enable **YouTube Data API v3** → create an API key. |
+| `APP_PASSWORD` | — | Turns on a browser login. **Set this** on anything other than localhost. |
+| `APP_USERNAME` | `admin` | Login username. |
+| `APP_TIMEZONE` | `UTC` | Time zone for "daily at" / cron schedules and displayed times, e.g. `Europe/London`. |
+| `VAULT_DIR` | `./vault` | Folder the app writes into (`/vault` in Docker). |
+| `NOTES_FOLDER` | `YouTube` | Subfolder of `VAULT_DIR` for notes. |
+| `OBSIDIAN_VAULT_NAME` | folder name | Your vault's name, for "open in Obsidian" links in the UI. |
+| `NOTE_TAGS` | `youtube,transcript` | Tags on every note. |
+| `TRANSCRIPT_LANGUAGES` | `en` | Preferred transcript languages, in order. Other languages are translated when YouTube allows it. |
+| `DATA_DIR` | `./data` | Database location (`/data` in Docker). |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Where the web server listens. |
 
-You don't need a YouTube API key to process a URL: transcripts come from
-[`youtube-transcript-api`](https://github.com/jdepoix/youtube-transcript-api), and
-titles fall back to YouTube's keyless oEmbed endpoint.
+## Getting notes into your vault
 
-## Usage
+Your vault lives on your computer (Obsidian Sync / iCloud), so the server needs a way to
+hand files over. The simplest reliable option is **[Syncthing](https://syncthing.net/)**:
 
-### Process a URL
+1. Install Syncthing on the NAS (most NAS app stores have it) and on your computer.
+2. On the NAS, share the folder mounted at `/vault` (e.g. `./vault/YouTube`).
+3. On your computer, accept it into a folder **inside** your vault, e.g. `<vault>/YouTube`.
+4. Set the NAS side to **Send Only**. The routine edits notes on your computer to add
+   summaries, and Send Only stops those edits being pushed back or overwritten.
 
-```bash
-yt-transcript process "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-yt-transcript process https://youtu.be/abc123def45 https://youtu.be/xyz987uvw65   # multiple URLs -> one email
-yt-transcript process <url> --no-email          # just save the Markdown (with summary)
-yt-transcript process <url> --no-summary --no-email   # transcript only, no API calls
-yt-transcript process <url> --to someone@example.com
-```
+If you use Obsidian Sync or iCloud as well, they'll carry the synced notes to your other
+devices as usual. Alternatively, if your NAS exposes an SMB share and the computer keeps
+it mounted, you can point a folder in your vault at it, but a disconnected share
+means missed notes, so Syncthing is more forgiving.
 
-### Search by keyword
+## The Claude routine (summaries + email)
 
-```bash
-yt-transcript search "rust async tutorial" -n 5 --days 30 --order viewCount
-yt-transcript search "rust async tutorial" -n 3 --process   # process every result too
-```
+Open the **Claude routine** page in the app. Enter your local vault path and email address,
+choose whether to send the email, create a draft, or skip email, and copy the generated
+prompt. Then, in the Claude desktop app, create a **scheduled task** with that prompt,
+give it access to your vault folder, and connect the **Gmail** connector if you want the
+email.
 
-### Scheduled watches
+Each run, the task:
 
-Define watches in `watches.yaml` (see `watches.example.yaml` for all options):
+1. finds notes with `summary_status: pending`
+2. writes a TL;DR, key points, notable quotes and a "worth watching?" line into each note's
+   `## Summary` section, and sets `summary_status: done`
+3. sends (or drafts) one digest email with all the new summaries
 
-```yaml
-watches:
-  - name: ai-news
-    query: "AI news this week"
-    every: 6h          # or: cron: "0 7 * * 1" with timezone: America/New_York
-    max_results: 5
-    lookback: 2d       # only videos published in this window
-    order: date
-```
+Because it works from `summary_status` rather than dates, nothing is lost if your
+computer was asleep: the next run catches up. Desktop scheduled tasks only run while your
+computer is on and the Claude app is open.
 
-```bash
-yt-transcript watch list
-yt-transcript watch run            # long-running scheduler (Ctrl-C to stop)
-yt-transcript watch run --once     # one pass over every watch, then exit
-yt-transcript watch run --once --name ai-news
-```
+## Notes and limits
 
-Each run searches YouTube, skips videos it has already handled (tracked in
-`STATE_FILE`, default `.state/processed.json`), processes the new ones, and sends
-**one digest email per watch**. Videos with no captions are recorded and skipped from
-then on; network or rate-limit failures are left unrecorded so the next run retries them.
-
-If you'd rather use the system scheduler than keep a process running, call `--once`
-from cron:
-
-```cron
-0 */6 * * *  cd /path/to/transcript-extractor && .venv/bin/yt-transcript watch run --once >> watch.log 2>&1
-```
-
-## Output
-
-Transcripts are saved to `TRANSCRIPTS_DIR` (default `transcripts/`) as
-`YYYY-MM-DD_<title-slug>_<video-id>.md`:
-
-```markdown
----
-title: "Video title"
-video_id: dQw4w9WgXcQ
-url: https://www.youtube.com/watch?v=dQw4w9WgXcQ
-channel: "Channel"
-language: en
-auto_generated: true
----
-
-# Video title
-
-## Summary
-**TL;DR** ...
-
-## Transcript
-**[00:00](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0s)** First minute of speech...
-**[01:02](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=62s)** Next minute...
-```
-
-## Summaries
-
-Summaries use Claude (`claude-opus-5-5` by default; override with `ANTHROPIC_MODEL`)
-with adaptive thinking at medium effort. Each one has a TL;DR, key points, notable
-quotes, and a "worth watching?" line. The request opts into the API's server-side
-refusal fallback (`fallbacks: "default"`), so if a safety classifier declines a
-transcript, the API retries on a recommended model instead of failing. If
-summarizing fails anyway, the transcript is still saved and the email says why the
-summary is missing.
+- YouTube often blocks transcript requests from cloud/datacenter IPs (`RequestBlocked` /
+  `IpBlocked`). A home NAS is usually fine. Blocked or network failures show as
+  **Failed** and are retried automatically (up to 5 attempts) and with the **Retry** button.
+  Videos without captions show as **No transcript**.
+- Each search costs 100 of the free 10,000 daily YouTube API units (about 100 searches
+  a day across Search and Schedules). Schedules can't run more often than every 15 minutes.
+- The UI has no per-form CSRF protection. Keep it on your LAN/VPN behind `APP_PASSWORD`
+  rather than exposing it to the internet.
 
 ## Development
 
@@ -123,11 +165,3 @@ summary is missing.
 pip install -e ".[dev]"
 pytest
 ```
-
-## Notes
-
-- YouTube sometimes blocks transcript requests from cloud/datacenter IPs
-  (`RequestBlocked` / `IpBlocked`). Run from a home connection, or configure a proxy
-  as described in the `youtube-transcript-api` docs.
-- A YouTube Data API search costs 100 quota units; the free daily quota is 10,000
-  (about 100 searches a day). Keep that in mind when choosing watch intervals.

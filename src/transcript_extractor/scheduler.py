@@ -1,173 +1,192 @@
-"""Scheduled keyword watches."""
+"""Background work: the transcript queue and scheduled watches."""
 
 from __future__ import annotations
 
 import logging
-import re
-from dataclasses import dataclass, field
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import yaml
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import ConfigError, Settings
-from .emailer import send_email
-from .pipeline import ProcessResult, process_video
-from .state import ProcessedStore
-from .youtube import search_videos
+from .db import Database
+from .pipeline import needs_processing, process_video
+from .youtube import Video, search_videos
 
 log = logging.getLogger(__name__)
 
-_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
-_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+UNITS = {"minutes": 1, "hours": 60, "days": 1440}
+MIN_INTERVAL_MINUTES = 15
 
 
-def parse_duration(value: str | int) -> timedelta:
-    """Parse '30m', '6h', '2d', '1w' (or an int number of minutes)."""
-    if isinstance(value, int):
-        return timedelta(minutes=value)
-    match = _DURATION_RE.match(str(value))
-    if not match:
-        raise ConfigError(f"Invalid duration {value!r}; use e.g. 30m, 6h, 2d, 1w")
-    return timedelta(**{_UNITS[match.group(2).lower()]: int(match.group(1))})
+def interval_minutes(watch) -> int:
+    return int(watch["every_value"]) * UNITS[watch["every_unit"]]
 
 
-@dataclass
-class Watch:
-    name: str
-    query: str
-    every: str | None = None
-    cron: str | None = None
-    timezone: str = "UTC"
-    max_results: int = 5
-    lookback: str = "7d"
-    order: str = "date"
-    channel_id: str | None = None
-    min_duration: str | None = None
-    email_to: list[str] = field(default_factory=list)
-    summarize: bool = True
-    email: bool = True
-
-    def __post_init__(self):
-        if not self.query:
-            raise ConfigError(f"Watch {self.name!r} needs a query")
-        if bool(self.every) == bool(self.cron):
-            raise ConfigError(f"Watch {self.name!r} needs exactly one of 'every' or 'cron'")
-        if isinstance(self.email_to, str):
-            self.email_to = [e.strip() for e in self.email_to.split(",") if e.strip()]
-        parse_duration(self.lookback)
-        if self.every:
-            parse_duration(self.every)
-
-    def trigger(self):
-        if self.every:
-            return IntervalTrigger(seconds=parse_duration(self.every).total_seconds())
-        return CronTrigger.from_crontab(self.cron, timezone=self.timezone)
+def build_trigger(watch, tz: str):
+    kind = watch["schedule_kind"]
+    if kind == "interval":
+        return IntervalTrigger(minutes=interval_minutes(watch), timezone=tz)
+    if kind == "daily":
+        hour, minute = (int(p) for p in watch["daily_time"].split(":"))
+        return CronTrigger(hour=hour, minute=minute, timezone=tz)
+    if kind == "cron":
+        return CronTrigger.from_crontab(watch["cron"], timezone=tz)
+    raise ConfigError(f"Unknown schedule kind {kind!r}")
 
 
-def load_watches(path: Path) -> list[Watch]:
-    path = Path(path)
-    if not path.exists():
-        raise ConfigError(f"{path} not found; copy watches.example.yaml to get started")
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    raw = data.get("watches") or []
-    known = set(Watch.__dataclass_fields__)
-    watches = []
-    for i, entry in enumerate(raw):
-        entry = dict(entry or {})
-        entry.setdefault("name", f"watch-{i + 1}")
-        unknown = set(entry) - known
-        if unknown:
-            raise ConfigError(f"Watch {entry['name']!r} has unknown keys: {sorted(unknown)}")
-        watches.append(Watch(**entry))
-    names = [w.name for w in watches]
-    if len(names) != len(set(names)):
-        raise ConfigError("Watch names must be unique")
-    return watches
+def describe_schedule(watch) -> str:
+    kind = watch["schedule_kind"]
+    if kind == "interval":
+        value, unit = watch["every_value"], watch["every_unit"]
+        return f"Every {value} {unit[:-1] if value == 1 else unit}"
+    if kind == "daily":
+        return f"Daily at {watch['daily_time']}"
+    return f"Cron: {watch['cron']}"
 
 
-def run_watch(
-    watch: Watch,
-    settings: Settings,
-    store: ProcessedStore,
-    *,
-    send: bool = True,
-) -> list[ProcessResult]:
-    """Search once, process new videos, and email a digest. Returns the results."""
-    since = datetime.now(timezone.utc) - parse_duration(watch.lookback)
-    log.info("[%s] Searching %r since %s", watch.name, watch.query, since.date())
-    videos = search_videos(
-        watch.query,
-        settings.require_youtube_key(),
-        max_results=watch.max_results,
-        published_after=since,
-        order=watch.order,
-        channel_id=watch.channel_id,
-        video_duration=watch.min_duration,
-    )
-    new = [v for v in videos if v.video_id not in store]
-    log.info("[%s] %d results, %d new", watch.name, len(videos), len(new))
+class Worker:
+    """Owns the transcript queue and the watch scheduler."""
 
-    results = []
-    for video in new:
-        result = process_video(video, settings, with_summary=watch.summarize)
-        results.append(result)
-        # Leave transient failures unmarked so the next run retries them.
-        if result.ok or not result.retryable:
-            store.mark(
-                video.video_id,
-                watch=watch.name,
-                title=video.title,
-                path=result.markdown_path,
-                error=result.error,
-            )
+    def __init__(self, settings: Settings, db: Database, *, max_workers: int = 2):
+        self.settings = settings
+        self.db = db
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fetch")
+        self.scheduler = BackgroundScheduler(timezone=settings.timezone)
+        self._watch_locks: dict[int, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
 
-    emailable = [r for r in results if r.ok]
-    if send and watch.email and emailable:
-        send_email(
-            settings,
-            [r.email_item() for r in emailable],
-            recipients=watch.email_to or None,
-            subject=f"[{watch.name}] {len(emailable)} new video summar"
-            + ("y" if len(emailable) == 1 else "ies"),
+    # --- lifecycle -----------------------------------------------------------
+
+    def start(self) -> None:
+        # Anything left mid-flight by a restart goes back on the queue.
+        for video_id in self.db.pending_video_ids():
+            row = self.db.get_video(video_id)
+            self._submit(_video_from_row(row), row["source"], row["watch_id"])
+        for watch in self.db.list_watches():
+            self.schedule(watch)
+        self.scheduler.start()
+
+    def shutdown(self) -> None:
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
+        self.executor.shutdown(wait=False, cancel_futures=True)
+
+    # --- queue ---------------------------------------------------------------
+
+    def enqueue(self, videos: list[Video], *, source: str,
+                watch_id: int | None = None, force: bool = False) -> tuple[int, int]:
+        """Queue videos that still need a transcript. Returns (queued, skipped).
+
+        `force` also retries videos that failed or had no transcript last time
+        (for explicit user requests); saved videos are never fetched twice.
+        """
+        existing = self.db.get_videos([v.video_id for v in videos])
+        queued = skipped = 0
+        for video in dict((v.video_id, v) for v in videos).values():
+            row = existing.get(video.video_id)
+            retry = force and row is not None and row["status"] in ("failed", "no_transcript")
+            if not (needs_processing(row) or retry):
+                skipped += 1
+                continue
+            self.db.upsert_video(video, status="queued", source=source, watch_id=watch_id)
+            self._submit(video, source, watch_id)
+            queued += 1
+        return queued, skipped
+
+    def _submit(self, video: Video, source: str, watch_id: int | None) -> None:
+        self.executor.submit(self._process_safely, video, source, watch_id)
+
+    def _process_safely(self, video: Video, source: str, watch_id: int | None) -> str | None:
+        try:
+            return process_video(video, self.settings, self.db, source=source, watch_id=watch_id)
+        except Exception:
+            log.exception("Unexpected error processing %s", video.video_id)
+            return None
+
+    # --- watches -------------------------------------------------------------
+
+    def schedule(self, watch) -> None:
+        """Add, replace, or remove the job for a watch to match its DB row."""
+        job_id = f"watch-{watch['id']}"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+        if not watch["enabled"]:
+            return
+        extra = {}
+        if watch["schedule_kind"] == "interval":
+            # Resume the cadence across restarts instead of running everything at boot.
+            last = self.db.last_runs().get(watch["id"])
+            due = datetime.now(timezone.utc)
+            if last:
+                started = datetime.fromisoformat(last["started_at"])
+                due = max(due, started + timedelta(minutes=interval_minutes(watch)))
+            extra["next_run_time"] = due
+        self.scheduler.add_job(
+            self.run_watch, trigger=build_trigger(watch, self.settings.timezone),
+            args=[watch["id"]], id=job_id, name=watch["name"],
+            max_instances=1, coalesce=True, misfire_grace_time=3600, **extra,
         )
-        log.info("[%s] Emailed %d summaries", watch.name, len(emailable))
-    return results
+
+    def unschedule(self, watch_id: int) -> None:
+        job_id = f"watch-{watch_id}"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+
+    def next_run(self, watch_id: int) -> datetime | None:
+        job = self.scheduler.get_job(f"watch-{watch_id}")
+        return job.next_run_time if job else None
+
+    def run_watch_now(self, watch_id: int) -> None:
+        self.executor.submit(self.run_watch, watch_id)
+
+    def is_running(self, watch_id: int) -> bool:
+        return self._lock_for(watch_id).locked()
+
+    def _lock_for(self, watch_id: int) -> threading.Lock:
+        with self._locks_guard:
+            return self._watch_locks.setdefault(watch_id, threading.Lock())
+
+    def run_watch(self, watch_id: int) -> dict | None:
+        """Search once and fetch transcripts for new videos. Returns run counts."""
+        lock = self._lock_for(watch_id)
+        if not lock.acquire(blocking=False):
+            log.info("Watch %s is already running; skipping", watch_id)
+            return None
+        try:
+            watch = self.db.get_watch(watch_id)
+            if watch is None:
+                return None
+            run_id = self.db.start_run(watch_id)
+            counts = {"found": 0, "new": 0, "saved": 0, "failed": 0}
+            try:
+                since = datetime.now(timezone.utc) - timedelta(days=watch["lookback_days"])
+                videos = search_videos(
+                    watch["query"], self.settings.require_youtube_key(),
+                    max_results=watch["max_results"], published_after=since,
+                    order=watch["order_by"], channel_id=watch["channel_id"] or None,
+                    video_duration=watch["duration"] or None,
+                )
+                existing = self.db.get_videos([v.video_id for v in videos])
+                new = [v for v in videos if needs_processing(existing.get(v.video_id))]
+                counts.update(found=len(videos), new=len(new))
+                log.info("[%s] %d results, %d new", watch["name"], len(videos), len(new))
+                for video in new:
+                    status = process_video(video, self.settings, self.db,
+                                           source=f"watch: {watch['name']}", watch_id=watch_id)
+                    counts["saved" if status == "saved" else "failed"] += 1
+                self.db.finish_run(run_id, **counts)
+            except Exception as exc:
+                log.exception("[%s] run failed", watch["name"])
+                self.db.finish_run(run_id, **counts, error=f"{type(exc).__name__}: {exc}")
+            return counts
+        finally:
+            lock.release()
 
 
-def _safe_run(watch: Watch, settings: Settings, store: ProcessedStore, send: bool) -> None:
-    try:
-        run_watch(watch, settings, store, send=send)
-    except Exception:
-        log.exception("[%s] Run failed", watch.name)
-
-
-def run_scheduler(watches: list[Watch], settings: Settings, *, send: bool = True) -> None:
-    """Run all watches on their schedules until interrupted."""
-    settings.require_youtube_key()
-    store = ProcessedStore(settings.state_file)
-    scheduler = BlockingScheduler(timezone="UTC")
-    now = datetime.now(timezone.utc)
-    for watch in watches:
-        # Interval watches run immediately at startup; cron watches wait for their slot.
-        # (Passing next_run_time=None would add the job paused, so only set it when needed.)
-        extra = {"next_run_time": now} if watch.every else {}
-        scheduler.add_job(
-            _safe_run,
-            trigger=watch.trigger(),
-            args=[watch, settings, store, send],
-            id=watch.name,
-            name=watch.name,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=3600,
-            **extra,
-        )
-    log.info("Scheduled %d watch(es): %s", len(watches), ", ".join(w.name for w in watches))
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        log.info("Scheduler stopped")
+def _video_from_row(row) -> Video:
+    return Video(video_id=row["video_id"], title=row["title"], channel=row["channel"],
+                 published_at=row["published_at"])

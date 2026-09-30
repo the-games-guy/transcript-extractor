@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block head %}{% if pending %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block content %}
+<h1>Transcripts</h1>
+<p class="lead">Paste YouTube links to save their transcripts to
+  <code>{{ settings.notes_folder or '/' }}</code> in your vault. New notes are marked
+  <code>summary_status: pending</code> for your Claude routine to summarise.</p>
+
+<div class="card">
+  <form method="post" action="{{ url_for('add_videos') }}" class="stack">
+    <div>
+      <label for="urls">YouTube links</label>
+      <textarea id="urls" name="urls" rows="3" required
+        placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…"></textarea>
+      <div class="hint">One per line. Watch, youtu.be, Shorts and live links all work.</div>
+    </div>
+    <div><button type="submit">Save transcripts</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h2 style="margin:0">Recent</h2>
+    {% if pending %}<span class="sub">Fetching {{ pending }}… this page refreshes itself.</span>{% endif %}
+  </div>
+  <div class="tabs">
+    <a href="{{ url_for('index') }}" class="{{ 'active' if not status }}">All</a>
+    {% for key in ['saved', 'failed', 'no_transcript'] %}
+      <a href="{{ url_for('index', status=key) }}" class="{{ 'active' if status == key }}">
+        {{ status_labels[key] }} · {{ counts.get(key, 0) }}</a>
+    {% endfor %}
+  </div>
+  {% if videos %}
+  <table>
+    <thead><tr><th>Video</th><th>Status</th><th class="hide-sm">Source</th><th class="hide-sm">Updated</th><th></th></tr></thead>
+    <tbody>
+    {% for v in videos %}
+      <tr>
+        <td>
+          <div class="title"><a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener">{{ v.title or v.video_id }}</a></div>
+          <div class="sub">{{ v.channel }}{% if v.note_path %} · <a href="{{ obsidian_link(v.note_path) }}" title="Open in Obsidian">{{ v.note_path }}</a>{% endif %}</div>
+          {% if v.error and v.status != 'saved' %}<div class="err-text">{{ v.error }}</div>{% endif %}
+        </td>
+        <td><span class="badge {{ v.status }}">{{ status_labels.get(v.status, v.status) }}</span></td>
+        <td class="hide-sm sub">{{ v.source }}</td>
+        <td class="hide-sm sub" title="{{ v.updated_at | localtime }}">{{ v.updated_at | ago }}</td>
+        <td>
+          {% if v.status in ('failed', 'no_transcript') %}
+          <form class="inline" method="post" action="{{ url_for('retry_video', video_id=v.video_id) }}">
+            <button class="secondary small" type="submit">Retry</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="empty">Nothing here yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,6 +1,7 @@
 import pytest
 
 from transcript_extractor.config import Settings
+from transcript_extractor.db import Database
 from transcript_extractor.transcripts import Segment, Transcript
 from transcript_extractor.youtube import Video
 
@@ -8,20 +9,25 @@ from transcript_extractor.youtube import Video
 @pytest.fixture
 def settings(tmp_path):
     return Settings(
+        vault_dir=tmp_path / "vault",
+        notes_folder="YouTube",
+        data_dir=tmp_path / "data",
         youtube_api_key="yt-key",
-        smtp_host="smtp.example.com",
-        email_from="me@example.com",
-        email_to=["me@example.com"],
-        transcripts_dir=tmp_path / "transcripts",
-        state_file=tmp_path / "state.json",
+        obsidian_vault_name="My Vault",
+        secret_key="test",
     )
+
+
+@pytest.fixture
+def db(settings):
+    return Database(settings.db_path)
 
 
 @pytest.fixture
 def video():
     return Video(
         video_id="dQw4w9WgXcQ",
-        title='Never "Gonna" Give You Up',
+        title='Never "Gonna": Give You Up?',
         channel="Rick Astley",
         published_at="2009-10-25T06:57:33Z",
     )

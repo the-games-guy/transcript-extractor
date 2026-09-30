@@ -3,6 +3,5 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .env
-watches.yaml
-transcripts/
-.state/
+data/
+vault/

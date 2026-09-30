@@ -1,0 +1,21 @@
+services:
+  transcript-extractor:
+    build: .
+    container_name: transcript-extractor
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Fixed paths inside the container; map them with the volumes below.
+      VAULT_DIR: /vault
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+    volumes:
+      # The folder that syncs into your Obsidian vault (see README: "Getting notes into your vault").
+      - ./vault:/vault
+      # App database (watches, history). Back this up if you care about it.
+      - ./data:/data
+    # Write files as your NAS user rather than root, so your sync tool can manage them.
+    # Find yours with `id -u` / `id -g`.
+    user: "1000:1000"

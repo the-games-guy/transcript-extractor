@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Transcripts{% endblock %} · Transcript Extractor</title>
+  {% block head %}{% endblock %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="top">
+  <div class="inner">
+    <a class="brand" href="{{ url_for('index') }}">Transcript Extractor</a>
+    <nav>
+      {% set ep = request.endpoint %}
+      <a href="{{ url_for('index') }}" class="{{ 'active' if ep == 'index' }}">Transcripts</a>
+      <a href="{{ url_for('search') }}" class="{{ 'active' if ep == 'search' }}">Search</a>
+      <a href="{{ url_for('watches') }}" class="{{ 'active' if ep in ('watches', 'new_watch', 'edit_watch') }}">Schedules</a>
+      <a href="{{ url_for('routine') }}" class="{{ 'active' if ep == 'routine' }}">Claude routine</a>
+    </nav>
+  </div>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

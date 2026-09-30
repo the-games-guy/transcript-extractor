@@ -4,7 +4,8 @@ import pytest
 import requests
 from youtube_transcript_api import NoTranscriptFound, RequestBlocked, TranscriptsDisabled
 
-from transcript_extractor import pipeline, summarizer
+from transcript_extractor import pipeline
+from transcript_extractor.pipeline import MAX_ATTEMPTS, needs_processing
 from transcript_extractor.transcripts import TranscriptError, fetch_transcript
 
 
@@ -59,66 +60,30 @@ def test_fetch_transcript_network_errors_are_transient(exc):
     assert not err.value.permanent
 
 
-class FakeStream:
-    def __init__(self, message, captured, kwargs):
-        self.message = message
-        captured.update(kwargs)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def get_final_message(self):
-        return self.message
+def test_needs_processing():
+    assert needs_processing(None)
+    assert not needs_processing({"status": "saved", "attempts": 1})
+    assert not needs_processing({"status": "no_transcript", "attempts": 1})
+    assert needs_processing({"status": "failed", "attempts": 1})
+    assert not needs_processing({"status": "failed", "attempts": MAX_ATTEMPTS})
 
 
-def _client(message, captured):
-    stream = lambda **kw: FakeStream(message, captured, kw)  # noqa: E731
-    return SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=stream)))
-
-
-def test_summarize_request_and_text(video, transcript):
-    captured = {}
-    msg = SimpleNamespace(stop_reason="end_turn", content=[
-        SimpleNamespace(type="thinking", thinking=""),
-        SimpleNamespace(type="text", text="**TL;DR** Song."),
-    ])
-    out = summarizer.summarize(video, transcript, model="claude-opus-5-5",
-                               client=_client(msg, captured))
-    assert out == "**TL;DR** Song."
-    assert captured["model"] == "claude-opus-5-5"
-    assert captured["thinking"] == {"type": "adaptive"}
-    assert captured["fallbacks"] == "default"
-    assert "We're no strangers to love" in captured["messages"][0]["content"]
-
-
-def test_summarize_refusal(video, transcript):
-    msg = SimpleNamespace(stop_reason="refusal", content=[])
-    with pytest.raises(summarizer.SummaryError):
-        summarizer.summarize(video, transcript, model="m", client=_client(msg, {}))
-
-
-def test_process_video_keeps_transcript_when_summary_fails(monkeypatch, settings, video, transcript):
+def test_process_video_saves_note(monkeypatch, settings, db, video, transcript):
     monkeypatch.setattr(pipeline, "fetch_transcript", lambda vid, langs: transcript)
-
-    def boom(*a, **k):
-        raise RuntimeError("api down")
-
-    monkeypatch.setattr(pipeline, "summarize", boom)
-    result = pipeline.process_video(video, settings)
-    assert result.ok and result.summary is None
-    assert "api down" in result.error
-    assert result.markdown_path.exists()
-    assert "api down" in result.email_item().summary
+    assert pipeline.process_video(video, settings, db, source="manual") == "saved"
+    row = db.get_video(video.video_id)
+    assert row["status"] == "saved" and row["attempts"] == 1 and row["source"] == "manual"
+    assert row["note_path"] == "YouTube/2009-10-25 Never Gonna Give You Up.md"
+    note = (settings.vault_dir / row["note_path"]).read_text()
+    assert "source: manual" in note and "summary_status: pending" in note
 
 
-def test_process_video_no_transcript(monkeypatch, settings, video):
+@pytest.mark.parametrize("permanent,status", [(True, "no_transcript"), (False, "failed")])
+def test_process_video_records_failures(monkeypatch, settings, db, video, permanent, status):
     def missing(*a):
-        raise TranscriptError("TranscriptsDisabled")
+        raise TranscriptError("nope", permanent=permanent)
 
     monkeypatch.setattr(pipeline, "fetch_transcript", missing)
-    result = pipeline.process_video(video, settings)
-    assert not result.ok and result.error.startswith("Transcript unavailable")
-    assert not result.retryable
+    assert pipeline.process_video(video, settings, db) == status
+    row = db.get_video(video.video_id)
+    assert row["status"] == status and row["error"] == "nope" and row["note_path"] is None

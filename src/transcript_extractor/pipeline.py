@@ -1,88 +1,64 @@
-"""The per-video pipeline: metadata -> transcript -> summary -> Markdown file."""
+"""The per-video pipeline: metadata -> transcript -> Obsidian note."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from pathlib import Path
 
 from .config import Settings
-from .emailer import EmailItem
-from .markdown import render_markdown, save_markdown
-from .summarizer import summarize
-from .transcripts import Transcript, TranscriptError, fetch_transcript
+from .db import Database
+from .notes import render_note, write_note
+from .transcripts import TranscriptError, fetch_transcript
 from .youtube import Video, get_video
 
 log = logging.getLogger(__name__)
 
+# Transient failures are retried (on "Retry", or when a watch finds the video
+# again) up to this many attempts.
+MAX_ATTEMPTS = 5
 
-@dataclass
-class ProcessResult:
-    video: Video
-    transcript: Transcript | None = None
-    markdown_path: Path | None = None
-    summary: str | None = None
-    error: str | None = None
-    # True when a failure may succeed on a later attempt (network trouble, rate limits).
-    retryable: bool = False
 
-    @property
-    def ok(self) -> bool:
-        return self.markdown_path is not None
-
-    def email_item(self) -> EmailItem:
-        if self.summary:
-            body = self.summary
-        elif self.error:
-            body = f"_No summary: {self.error}_"
-        else:
-            body = "_Summary disabled._"
-        return EmailItem(
-            title=self.video.title or self.video.video_id,
-            url=self.video.url,
-            channel=self.video.channel,
-            summary=body,
-            markdown_path=self.markdown_path,
-        )
+def needs_processing(row) -> bool:
+    """Whether a video (DB row or None) should be fetched."""
+    if row is None:
+        return True
+    return row["status"] == "failed" and row["attempts"] < MAX_ATTEMPTS
 
 
 def process_video(
-    video: Video | str,
+    video: Video,
     settings: Settings,
+    db: Database,
     *,
-    with_summary: bool = True,
-) -> ProcessResult:
-    """Fetch the transcript for one video, summarize it, and save it as Markdown.
+    source: str | None = None,
+    watch_id: int | None = None,
+) -> str:
+    """Fetch one transcript and save it to the vault. Returns the final status.
 
-    Never raises for per-video problems (no captions, API errors); they are
-    reported on the result so batch runs can continue.
+    Never raises for per-video problems; they're recorded on the video row.
     """
-    if isinstance(video, str):
-        video = get_video(video, settings.youtube_api_key)
-    elif not video.title:
+    if not video.title:
         video = get_video(video.video_id, settings.youtube_api_key)
-    result = ProcessResult(video=video)
+    db.upsert_video(video, status="processing", source=source, watch_id=watch_id,
+                    count_attempt=True)
 
     log.info("Fetching transcript for %s (%s)", video.video_id, video.title or "untitled")
     try:
-        result.transcript = fetch_transcript(video.video_id, settings.transcript_languages)
+        transcript = fetch_transcript(video.video_id, settings.transcript_languages)
+        row = db.get_video(video.video_id)
+        content = render_note(video, transcript, source=row["source"] if row else "",
+                              tags=settings.note_tags)
+        path = write_note(settings.notes_dir, video, content)
     except TranscriptError as exc:
-        result.retryable = not exc.permanent
-        result.error = (
-            f"Transcript unavailable - {exc}" if exc.permanent else f"Transcript fetch failed - {exc}"
-        )
-        log.warning("%s: %s", video.video_id, result.error)
-        return result
+        status = "failed" if not exc.permanent else "no_transcript"
+        db.upsert_video(video, status=status, error=str(exc))
+        log.warning("%s: %s", video.video_id, exc)
+        return status
+    except Exception as exc:  # unexpected (disk full, bad path, ...): keep it retryable
+        db.upsert_video(video, status="failed", error=f"{type(exc).__name__}: {exc}")
+        log.exception("%s: failed to save transcript", video.video_id)
+        return "failed"
 
-    if with_summary:
-        log.info("Summarizing %s with %s", video.video_id, settings.anthropic_model)
-        try:
-            result.summary = summarize(video, result.transcript, model=settings.anthropic_model)
-        except Exception as exc:  # keep the transcript even if summarizing fails
-            result.error = f"Summary failed - {type(exc).__name__}: {exc}"
-            log.warning("%s: %s", video.video_id, result.error)
-
-    content = render_markdown(video, result.transcript, result.summary)
-    result.markdown_path = save_markdown(settings.transcripts_dir, video, content)
-    log.info("Saved %s", result.markdown_path)
-    return result
+    rel = path.relative_to(settings.vault_dir).as_posix()
+    db.upsert_video(video, status="saved", error=None, note_path=rel)
+    log.info("Saved %s", rel)
+    return "saved"
