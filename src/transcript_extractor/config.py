@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 
 class ConfigError(RuntimeError):
@@ -35,7 +35,9 @@ class Settings:
 
     @classmethod
     def from_env(cls, env_file: str | os.PathLike | None = None) -> "Settings":
-        load_dotenv(env_file, override=False)
+        # Look for .env in the working directory (not next to the installed package),
+        # so it works from a service manager or a venv outside the project folder.
+        load_dotenv(env_file or find_dotenv(usecwd=True), override=False)
         env = os.environ
         vault_dir = Path(env.get("VAULT_DIR") or "vault")
         return cls(

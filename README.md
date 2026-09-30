@@ -86,16 +86,34 @@ Then open `http://<server>:8000` and log in with `APP_USERNAME` / `APP_PASSWORD`
 
 Set `user:` in the compose file to your NAS user's UID:GID so the files aren't owned by root.
 
-### Without Docker
+### Without Docker (systemd, e.g. in an LXC container)
 
-Requires Python 3.10+.
+Requires Python 3.10+ (`apt install python3 python3-venv git` on Debian/Ubuntu).
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install .
-cp .env.example .env
-transcript-extractor          # serves on HOST:PORT (default 0.0.0.0:8000 from .env)
+sudo useradd --system --create-home transcripts     # or use an existing user
+sudo git clone -b claude/youtube-transcript-summarizer-uxpwi8 \
+  https://github.com/the-games-guy/transcript-extractor.git /opt/transcript-extractor
+sudo chown -R transcripts: /opt/transcript-extractor
+cd /opt/transcript-extractor
+sudo -u transcripts python3 -m venv .venv
+sudo -u transcripts .venv/bin/pip install .
+sudo -u transcripts cp .env.example .env
+sudo -u transcripts nano .env      # set VAULT_DIR, YOUTUBE_API_KEY, APP_PASSWORD, APP_TIMEZONE…
 ```
+
+Try it in the foreground first (`sudo -u transcripts .venv/bin/transcript-extractor`,
+Ctrl-C to stop), then install the service so it starts on boot:
+
+```bash
+sudo cp deploy/transcript-extractor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now transcript-extractor
+systemctl status transcript-extractor        # logs: journalctl -u transcript-extractor -f
+```
+
+Edit `User=` / paths in the service file if you used different ones. To update later:
+`sudo -u transcripts git pull && sudo -u transcripts .venv/bin/pip install . && sudo systemctl restart transcript-extractor`.
 
 ### Settings
 

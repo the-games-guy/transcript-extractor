@@ -1,0 +1,19 @@
+# systemd service for running without Docker.
+# Install: see "Running without Docker (systemd)" in README.md.
+[Unit]
+Description=Transcript Extractor (YouTube transcripts to Obsidian)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The user that owns the vault folder the app writes into.
+User=transcripts
+# The cloned repo; .env is read from here, and relative paths in it resolve from here.
+WorkingDirectory=/opt/transcript-extractor
+ExecStart=/opt/transcript-extractor/.venv/bin/transcript-extractor
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
