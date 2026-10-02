@@ -48,7 +48,7 @@ echo "==> Done"
 echo "Syncthing version : $(ct /usr/bin/syncthing --version | head -n1)"
 echo "Config            : ${CONFIG:-<not created yet; re-run the find in a few seconds>}"
 [ -n "$CONFIG" ] && echo "GUI address       : $(ct grep -oP '(?<=<address>)[^<]+(?=</address>)' "$CONFIG" | head -n1)"
-echo "Device ID         : $(ct su -s /bin/sh syncthing -c '/usr/bin/syncthing --device-id' 2>/dev/null || echo '<see GUI>')"
+echo "Device ID         : $(ct su -s /bin/sh syncthing -c '/usr/bin/syncthing --device-id 2>/dev/null || /usr/bin/syncthing device-id')"
 echo
 echo "Put these in the app's .env on CT$CTID:"
 echo "APP_UID=$(ct id -u syncthing)"
