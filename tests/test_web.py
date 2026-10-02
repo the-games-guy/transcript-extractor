@@ -59,10 +59,11 @@ def test_add_videos(client, worker):
 def test_index_lists_videos_with_obsidian_link(client):
     db = client.application.config["DB"]
     db.upsert_video(Video("dQw4w9WgXcQ", "Song", "Rick"), status="saved",
-                    note_path="YouTube/2009-10-25 Song.md", source="manual")
+                    note_path="Song (dQw4w9WgXcQ).md", source="manual")
     db.upsert_video(Video("zzzzzzzzzzz", "Broken"), status="failed", error="IpBlocked: nope")
     body = client.get("/").get_data(as_text=True)
-    assert "obsidian://open?vault=My%20Vault&amp;file=YouTube/2009-10-25%20Song" in body
+    assert ("obsidian://open?vault=tokvault&amp;file=YouTube%20Transcripts/"
+            "Song%20%28dQw4w9WgXcQ%29") in body
     assert "IpBlocked: nope" in body and "Retry" in body
     assert "Broken" not in client.get("/?status=saved").get_data(as_text=True)
 

@@ -73,9 +73,42 @@ def test_process_video_saves_note(monkeypatch, settings, db, video, transcript):
     assert pipeline.process_video(video, settings, db, source="manual") == "saved"
     row = db.get_video(video.video_id)
     assert row["status"] == "saved" and row["attempts"] == 1 and row["source"] == "manual"
-    assert row["note_path"] == "YouTube/2009-10-25 Never Gonna Give You Up.md"
-    note = (settings.vault_dir / row["note_path"]).read_text()
-    assert "source: manual" in note and "summary_status: pending" in note
+    assert row["note_path"] == "Never Gonna Give You Up (dQw4w9WgXcQ).md"
+    note = (settings.output_dir / row["note_path"]).read_text()
+    assert 'source: "manual"' in note and "summary_status: pending" in note
+
+
+def test_process_video_keeps_existing_note(monkeypatch, settings, db, video):
+    """A note from the original CLI (or one already summarised) is never overwritten."""
+    existing = settings.output_dir / "Older title (dQw4w9WgXcQ).md"
+    existing.write_text("summarised already")
+
+    def should_not_fetch(*a):
+        raise AssertionError("fetched a video that already has a note")
+
+    monkeypatch.setattr(pipeline, "fetch_transcript", should_not_fetch)
+    assert pipeline.process_video(video, settings, db, source="watch: w") == "saved"
+    assert existing.read_text() == "summarised already"
+    assert db.get_video(video.video_id)["note_path"] == existing.name
+
+    # Pasted links have no title yet; it's recovered from the existing file name.
+    pipeline.process_video(pipeline.Video("dQw4w9WgXcQ"), settings, db)
+    assert db.get_video("dQw4w9WgXcQ")["title"] == "Older title"
+
+
+def test_process_video_force_rewrites_and_renames(monkeypatch, settings, db, video, transcript):
+    existing = settings.output_dir / "Older title (dQw4w9WgXcQ).md"
+    existing.write_text("old")
+    monkeypatch.setattr(pipeline, "fetch_transcript", lambda vid, langs: transcript)
+    assert pipeline.process_video(video, settings, db, force=True) == "saved"
+    assert [p.name for p in settings.output_dir.iterdir()] == [
+        "Never Gonna Give You Up (dQw4w9WgXcQ).md"]
+
+
+def test_process_video_missing_output_dir(settings, db, video):
+    settings.output_dir = settings.output_dir / "missing"
+    assert pipeline.process_video(video, settings, db) == "failed"
+    assert "Output folder unavailable" in db.get_video(video.video_id)["error"]
 
 
 @pytest.mark.parametrize("permanent,status", [(True, "no_transcript"), (False, "failed")])

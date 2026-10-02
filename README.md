@@ -1,51 +1,54 @@
 # transcript-extractor
 
-A small self-hosted web app that saves YouTube transcripts into your Obsidian vault.
+Saves YouTube transcripts as Markdown notes into `/srv/yt-transcripts` on CT102.
+Native Syncthing shares that folder (Send Only) into the Obsidian vault as
+`tokvault/YouTube Transcripts/`, and a Claude routine on the Mac summarises new
+notes and emails a digest.
 
-- **Transcripts page:** paste one or more YouTube links (watch, `youtu.be`, Shorts, live) to save their transcripts
-- **Search:** find videos by keyword, tick the ones you want, and save them
-- **Schedules:** keyword searches that run automatically (every N hours, daily at a set time, or a cron expression) and save any videos you don't have yet
-- **Claude routine:** builds a prompt for a scheduled task in the Claude desktop app, which summarises the new notes in your vault and emails you a digest
+It runs in Docker as a small web app with a login:
 
-The app does **not** summarise anything itself. Every note it writes is marked
-`summary_status: pending`, and your Claude routine picks those up.
+- **Transcripts:** paste YouTube links (watch, `youtu.be`, Shorts, live); see what's
+  saved, failed, or has no captions, and retry failures
+- **Search:** find videos by keyword and save the ones you tick
+- **Schedules:** keyword searches that run automatically (every N hours, daily at a
+  time, or cron) and save any new videos
+- **Claude routine:** builds the prompt for a Claude desktop scheduled task that
+  writes summaries into the notes and emails them
 
+The original command line still works:
+
+```bash
+docker compose run --rm yt-transcripts https://youtu.be/<id> [<url> ...]   # --force rewrites
 ```
- server / NAS                         your computer
-┌──────────────────────┐   sync    ┌─────────────────────────────────────┐
-│ transcript-extractor │ ────────▶ │ Obsidian vault / YouTube/*.md        │
-│  (web UI, schedules) │           │        ▲                             │
-└──────────────────────┘           │        │ reads + writes summaries    │
-                                   │ Claude desktop scheduled task ──────┼──▶ Gmail digest
-                                   └─────────────────────────────────────┘
-```
 
-## Notes it writes
+Deployment on CT102, including upgrading from the command-line-only version:
+[docs/ct102-deploy.md](docs/ct102-deploy.md).
 
-`<vault>/YouTube/2026-09-30 Video title.md`:
+## Notes
+
+One note per video, `<title> (<video_id>).md`:
 
 ```markdown
 ---
-title: Video title
-channel: Channel name
-url: https://www.youtube.com/watch?v=dQw4w9WgXcQ
-video_id: dQw4w9WgXcQ
-published: '2026-09-30'
-saved: '2026-09-30T08:00:00Z'
-language: en
+title: "Video title"
+channel: "Channel"
+url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+video_id: "dQw4w9WgXcQ"
+published: 2026-09-30
+language: "en"
 auto_generated: true
-source: 'watch: AI news'
+fetched: 2026-10-02
+source: "watch: AI news"
+type: youtube-transcript
 summary_status: pending
-tags:
-- youtube
-- transcript
+tags: [youtube, transcript]
 ---
 
 # Video title
 
 ![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
 
-**Channel:** Channel name · **Published:** 2026-09-30 · **Transcript:** English (auto-generated)
+[Channel](https://www.youtube.com/watch?v=dQw4w9WgXcQ) · Published 2026-09-30 · English (auto-generated)
 
 ## Summary
 
@@ -53,133 +56,52 @@ tags:
 
 ## Transcript
 
-**[00:00](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0s)** First minute of speech…
-**[01:02](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=62s)** Next minute…
+[0:00](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0s) First minute of speech…
+
+[1:02](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=62s) Next minute…
 ```
 
-The `![](…)` line shows the video as an embedded player in Obsidian. The routine
-replaces `<!-- summary:pending -->` (invisible in reading view) with the summary and sets
-`summary_status: done`, so you can list outstanding notes with a Dataview query or
-a Bases filter on that property.
+- The `![](…)` line embeds the video player in Obsidian.
+- The Claude routine replaces `<!-- summary:pending -->` (invisible in reading view)
+  with the summary and sets `summary_status: done`.
+- `type: youtube-transcript` marks the note as untrusted third-party text.
+- Notes are written to a `.tmp-*` file and renamed when complete, so Syncthing
+  never syncs a half-written note (CT102's `.stignore` ignores `.tmp-*`).
+- A video that already has a note, found by the video ID in the file name, is never
+  fetched or overwritten again, so summaries and older notes are safe. Only the
+  command line's `--force` rewrites one.
 
-The app remembers every video it has handled in its own database, so moving,
-renaming or deleting notes in your vault never causes a video to be re-saved.
+## Configuration
 
-## Running it on a server or NAS (Docker)
+Everything is set in `.env` (copy `.env.example`):
 
-```bash
-git clone https://github.com/the-games-guy/transcript-extractor.git
-cd transcript-extractor
-cp .env.example .env          # set YOUTUBE_API_KEY, APP_PASSWORD, APP_TIMEZONE, OBSIDIAN_VAULT_NAME
-mkdir -p vault data           # create these yourself so they aren't owned by root
-docker compose up -d --build
-```
-
-Then open `http://<server>:8000` and log in with `APP_USERNAME` / `APP_PASSWORD`.
-
-`docker-compose.yml` mounts two folders:
-
-| Mount | What |
+| Variable | Purpose |
 |---|---|
-| `./vault` → `/vault` | Where notes are written (inside `NOTES_FOLDER`, default `YouTube`). Point this at the folder you sync to your computer. |
-| `./data` → `/data` | The app's SQLite database (schedules, history). |
+| `APP_UID` / `APP_GID` | The syncthing user's IDs, so Syncthing can manage the files. |
+| `OUTPUT_DIR` | Host folder notes go into (`/srv/yt-transcripts`). |
+| `DATA_DIR` | Host folder for the app's database (`/srv/yt-transcripts-data`). Not synced. |
+| `BIND_ADDRESS` / `HOST_PORT` | Where the web UI is published: CT102's LAN IP, port 8000. |
+| `APP_USERNAME` / `APP_PASSWORD` | Web login. The password is required. |
+| `APP_TIMEZONE` | Time zone for schedules, e.g. `Europe/London`. |
+| `YOUTUBE_API_KEY` | YouTube Data API v3 key, for Search and Schedules (pasted links don't need it). |
+| `OBSIDIAN_VAULT_NAME` / `VAULT_FOLDER` | `tokvault` / `YouTube Transcripts`: for "open in Obsidian" links and the routine prompt. |
+| `TRANSCRIPT_LANGUAGES` | Preferred transcript languages, in order (default `en`). |
+| `NOTE_TAGS` | Tags on every note (default `youtube,transcript`). |
 
-Set `user:` in the compose file to your NAS user's UID:GID so the files aren't owned by root.
+## Limits
 
-### Without Docker (systemd, e.g. in an LXC container)
-
-Requires Python 3.10+ (`apt install python3 python3-venv git` on Debian/Ubuntu).
-
-```bash
-sudo useradd --system --create-home transcripts     # or use an existing user
-sudo git clone -b claude/youtube-transcript-summarizer-uxpwi8 \
-  https://github.com/the-games-guy/transcript-extractor.git /opt/transcript-extractor
-sudo chown -R transcripts: /opt/transcript-extractor
-cd /opt/transcript-extractor
-sudo -u transcripts python3 -m venv .venv
-sudo -u transcripts .venv/bin/pip install .
-sudo -u transcripts cp .env.example .env
-sudo -u transcripts nano .env      # set VAULT_DIR, YOUTUBE_API_KEY, APP_PASSWORD, APP_TIMEZONE…
-```
-
-Try it in the foreground first (`sudo -u transcripts .venv/bin/transcript-extractor`,
-Ctrl-C to stop), then install the service so it starts on boot:
-
-```bash
-sudo cp deploy/transcript-extractor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now transcript-extractor
-systemctl status transcript-extractor        # logs: journalctl -u transcript-extractor -f
-```
-
-Edit `User=` / paths in the service file if you used different ones. To update later:
-`sudo -u transcripts git pull && sudo -u transcripts .venv/bin/pip install . && sudo systemctl restart transcript-extractor`.
-
-### Settings
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `YOUTUBE_API_KEY` | — | Needed for Search and Schedules (not for pasted links). Google Cloud Console → enable **YouTube Data API v3** → create an API key. |
-| `APP_PASSWORD` | — | Turns on a browser login. **Set this** on anything other than localhost. |
-| `APP_USERNAME` | `admin` | Login username. |
-| `APP_TIMEZONE` | `UTC` | Time zone for "daily at" / cron schedules and displayed times, e.g. `Europe/London`. |
-| `VAULT_DIR` | `./vault` | Folder the app writes into (`/vault` in Docker). |
-| `NOTES_FOLDER` | `YouTube` | Subfolder of `VAULT_DIR` for notes. |
-| `OBSIDIAN_VAULT_NAME` | folder name | Your vault's name, for "open in Obsidian" links in the UI. |
-| `NOTE_TAGS` | `youtube,transcript` | Tags on every note. |
-| `TRANSCRIPT_LANGUAGES` | `en` | Preferred transcript languages, in order. Other languages are translated when YouTube allows it. |
-| `DATA_DIR` | `./data` | Database location (`/data` in Docker). |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | Where the web server listens. |
-
-## Getting notes into your vault
-
-Your vault lives on your computer (Obsidian Sync / iCloud), so the server needs a way to
-hand files over. The simplest reliable option is **[Syncthing](https://syncthing.net/)**:
-
-1. Install Syncthing on the NAS (most NAS app stores have it) and on your computer.
-2. On the NAS, share the folder mounted at `/vault` (e.g. `./vault/YouTube`).
-3. On your computer, accept it into a folder **inside** your vault, e.g. `<vault>/YouTube`.
-4. Set the NAS side to **Send Only**. The routine edits notes on your computer to add
-   summaries, and Send Only stops those edits being pushed back or overwritten.
-
-If you use Obsidian Sync or iCloud as well, they'll carry the synced notes to your other
-devices as usual. Alternatively, if your NAS exposes an SMB share and the computer keeps
-it mounted, you can point a folder in your vault at it, but a disconnected share
-means missed notes, so Syncthing is more forgiving.
-
-## The Claude routine (summaries + email)
-
-Open the **Claude routine** page in the app. Enter your local vault path and email address,
-choose whether to send the email, create a draft, or skip email, and copy the generated
-prompt. Then, in the Claude desktop app, create a **scheduled task** with that prompt,
-give it access to your vault folder, and connect the **Gmail** connector if you want the
-email.
-
-Each run, the task:
-
-1. finds notes with `summary_status: pending`
-2. writes a TL;DR, key points, notable quotes and a "worth watching?" line into each note's
-   `## Summary` section, and sets `summary_status: done`
-3. sends (or drafts) one digest email with all the new summaries
-
-Because it works from `summary_status` rather than dates, nothing is lost if your
-computer was asleep: the next run catches up. Desktop scheduled tasks only run while your
-computer is on and the Claude app is open.
-
-## Notes and limits
-
-- YouTube often blocks transcript requests from cloud/datacenter IPs (`RequestBlocked` /
-  `IpBlocked`). A home NAS is usually fine. Blocked or network failures show as
-  **Failed** and are retried automatically (up to 5 attempts) and with the **Retry** button.
-  Videos without captions show as **No transcript**.
-- Each search costs 100 of the free 10,000 daily YouTube API units (about 100 searches
-  a day across Search and Schedules). Schedules can't run more often than every 15 minutes.
-- The UI has no per-form CSRF protection. Keep it on your LAN/VPN behind `APP_PASSWORD`
-  rather than exposing it to the internet.
+- YouTube sometimes blocks transcript requests (`RequestBlocked` / `IpBlocked`).
+  Those show as **Failed** and are retried automatically (up to 5 attempts) or with
+  **Retry**. Videos without captions show as **No transcript**.
+- Each search costs 100 of the free 10,000 daily YouTube API units. Schedules can't
+  run more often than every 15 minutes.
+- The UI has a login but no CSRF tokens. Keep it on the LAN (`BIND_ADDRESS`), not
+  behind Caddy or cloudflared, unless you add proper authentication in front.
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt && pip install -e .
 pytest
 ```

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "transcript-extractor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Web app that saves YouTube transcripts into an Obsidian vault, on demand or on a schedule."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -15,12 +15,11 @@ dependencies = [
     "youtube-transcript-api>=1.2",
     "requests>=2.31",
     "python-dotenv>=1.0",
-    "PyYAML>=6.0",
     "APScheduler>=3.10,<4",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "PyYAML>=6.0"]
 
 [project.scripts]
 transcript-extractor = "transcript_extractor.__main__:main"

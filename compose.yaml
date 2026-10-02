@@ -1,0 +1,38 @@
+# Deployed on CT102 alongside the dashboards stack.
+# Notes are written to $OUTPUT_DIR on the host, which native Syncthing
+# (syncthing@syncthing) shares as the Send Only folder "yt-transcripts".
+#
+#   docker compose up -d --build                       # web app on BIND_ADDRESS:HOST_PORT
+#   docker compose run --rm yt-transcripts <url> ...   # or save from the command line
+
+services:
+  yt-transcripts:
+    build: .
+    image: transcript-extractor:latest
+    # Must be the syncthing user's IDs, or Syncthing can't manage the files.
+    # deploy/ct102/setup-syncthing.sh prints them; set them in .env.
+    user: "${APP_UID:?set APP_UID in .env}:${APP_GID:?set APP_GID in .env}"
+    env_file: .env
+    environment:
+      # Paths inside the container; the host paths are mapped in `volumes`.
+      OUTPUT_DIR: /output
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: "8000"
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env - CT102 is internet-exposed}
+    ports:
+      # CT102 is internet-exposed: publish only on the address in BIND_ADDRESS
+      # (CT102's LAN IP), never on all interfaces.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-8000}:8000"
+    volumes:
+      - ${OUTPUT_DIR:-/srv/yt-transcripts}:/output
+      # App database (schedules, history). Not synced; keep it outside OUTPUT_DIR.
+      - ${DATA_DIR:-/srv/yt-transcripts-data}:/data
+    # Give the container as little as possible.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

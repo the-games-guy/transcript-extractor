@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Transcripts</h1>
 <p class="lead">Paste YouTube links to save their transcripts to
-  <code>{{ settings.notes_folder or '/' }}</code> in your vault. New notes are marked
+  <code>{{ settings.vault_folder or 'your vault' }}</code>. New notes are marked
   <code>summary_status: pending</code> for your Claude routine to summarise.</p>
 
 <div class="card">
@@ -38,7 +38,7 @@
       <tr>
         <td>
           <div class="title"><a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener">{{ v.title or v.video_id }}</a></div>
-          <div class="sub">{{ v.channel }}{% if v.note_path %} · <a href="{{ obsidian_link(v.note_path) }}" title="Open in Obsidian">{{ v.note_path }}</a>{% endif %}</div>
+          <div class="sub">{{ v.channel }}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
           {% if v.error and v.status != 'saved' %}<div class="err-text">{{ v.error }}</div>{% endif %}
         </td>
         <td><span class="badge {{ v.status }}">{{ status_labels.get(v.status, v.status) }}</span></td>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -37,7 +38,9 @@ def _secret_key(settings: Settings) -> str:
     path = settings.data_dir / "secret_key"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(secrets.token_hex(32))
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secrets.token_hex(32))
     return path.read_text().strip()
 
 
@@ -155,9 +158,11 @@ def create_app(settings: Settings, *, start_worker: bool = True,
         return f"in {text}" if future else (f"{text} ago" if text != "moments" else "just now")
 
     def obsidian_link(note_path: str | None) -> str | None:
-        if not note_path:
+        if not note_path or not settings.obsidian_vault_name:
             return None
         file = note_path[:-3] if note_path.endswith(".md") else note_path
+        if settings.vault_folder:
+            file = f"{settings.vault_folder}/{file}"
         return (f"obsidian://open?vault={quote(settings.obsidian_vault_name)}"
                 f"&file={quote(file)}")
 

@@ -19,14 +19,17 @@ def _split_csv(value: str | None) -> list[str]:
 
 @dataclass
 class Settings:
-    vault_dir: Path = Path("vault")
-    notes_folder: str = "YouTube"
-    data_dir: Path = Path("data")
+    # Folder notes are written into (/output in Docker; /srv/yt-transcripts on CT102).
+    output_dir: Path = Path("/output")
+    # Where that folder appears inside the Obsidian vault, e.g. "YouTube Transcripts".
+    # Only used for "open in Obsidian" links and the Claude routine prompt.
+    vault_folder: str = "YouTube Transcripts"
+    obsidian_vault_name: str = ""
+    data_dir: Path = Path("/data")
     youtube_api_key: str | None = None
     transcript_languages: list[str] = field(default_factory=lambda: ["en"])
     note_tags: list[str] = field(default_factory=lambda: ["youtube", "transcript"])
     timezone: str = "UTC"
-    obsidian_vault_name: str = ""
     app_username: str = "admin"
     app_password: str | None = None
     secret_key: str | None = None
@@ -39,26 +42,21 @@ class Settings:
         # so it works from a service manager or a venv outside the project folder.
         load_dotenv(env_file or find_dotenv(usecwd=True), override=False)
         env = os.environ
-        vault_dir = Path(env.get("VAULT_DIR") or "vault")
         return cls(
-            vault_dir=vault_dir,
-            notes_folder=(env.get("NOTES_FOLDER") or "YouTube").strip("/"),
-            data_dir=Path(env.get("DATA_DIR") or "data"),
+            output_dir=Path(env.get("OUTPUT_DIR") or "/output"),
+            vault_folder=(env.get("VAULT_FOLDER") or "").strip("/"),
+            obsidian_vault_name=env.get("OBSIDIAN_VAULT_NAME") or "",
+            data_dir=Path(env.get("DATA_DIR") or "/data"),
             youtube_api_key=env.get("YOUTUBE_API_KEY") or None,
             transcript_languages=_split_csv(env.get("TRANSCRIPT_LANGUAGES")) or ["en"],
             note_tags=_split_csv(env.get("NOTE_TAGS")) or ["youtube", "transcript"],
-            timezone=env.get("APP_TIMEZONE") or "UTC",
-            obsidian_vault_name=env.get("OBSIDIAN_VAULT_NAME") or vault_dir.resolve().name,
+            timezone=env.get("APP_TIMEZONE") or env.get("TZ") or "UTC",
             app_username=env.get("APP_USERNAME") or "admin",
             app_password=env.get("APP_PASSWORD") or None,
             secret_key=env.get("SECRET_KEY") or None,
             host=env.get("HOST") or "127.0.0.1",
             port=int(env.get("PORT") or 8000),
         )
-
-    @property
-    def notes_dir(self) -> Path:
-        return self.vault_dir / self.notes_folder if self.notes_folder else self.vault_dir
 
     @property
     def db_path(self) -> Path:
