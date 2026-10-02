@@ -15,9 +15,6 @@ Everything runs from **one shell on the Proxmox host** unless it's marked
 the same shell open throughout. Pairing is done with `syncthing cli`, so
 CT102's Syncthing GUI never has to listen on the LAN.
 
-> The code is on branch `claude/modest-davinci-hps5w0` until it's merged.
-> After it's merged, clone `main` instead.
-
 ## 0. Safety net
 
 ```bash
@@ -75,7 +72,7 @@ pct exec 102 -- ss -ltn | grep 8384                          # expect: 127.0.0.1
 ## 4. Deploy the app
 
 ```bash
-pct exec 102 -- git clone -b claude/modest-davinci-hps5w0 https://github.com/the-games-guy/transcript-extractor.git /opt/transcript-extractor
+pct exec 102 -- git clone https://github.com/the-games-guy/transcript-extractor.git /opt/transcript-extractor
 pct exec 102 -- cp /opt/transcript-extractor/.env.example /opt/transcript-extractor/.env
 
 ST_UID=$(pct exec 102 -- id -u syncthing); ST_GID=$(pct exec 102 -- id -g syncthing)
