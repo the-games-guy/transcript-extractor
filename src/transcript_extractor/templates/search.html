@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<h1>Search YouTube</h1>
+<p class="lead">Find videos by keyword, tick the ones you want, and save their transcripts.</p>
+{% if not has_youtube_key %}
+  <div class="banner">Search needs a YouTube Data API key. Set <code>YOUTUBE_API_KEY</code> and restart.</div>
+{% endif %}
+
+<div class="card">
+  <form method="get" action="{{ url_for('search') }}" class="stack">
+    <div class="row">
+      <div class="grow"><input type="text" name="q" value="{{ form.q }}" placeholder="e.g. home lab networking" aria-label="Keywords" required></div>
+      <button type="submit">Search</button>
+    </div>
+    <div class="grid">
+      <div><label for="days">Published within</label>
+        <select id="days" name="days">
+          {% for d, label in [('1','24 hours'),('7','7 days'),('30','30 days'),('365','A year'),('0','Any time')] %}
+          <option value="{{ d }}" {{ 'selected' if form.days == d }}>{{ label }}</option>{% endfor %}
+        </select></div>
+      <div><label for="order">Sort by</label>
+        <select id="order" name="order">
+          {% for k, label in ORDERS.items() %}<option value="{{ k }}" {{ 'selected' if form.order == k }}>{{ label }}</option>{% endfor %}
+        </select></div>
+      <div><label for="duration">Length</label>
+        <select id="duration" name="duration">
+          {% for k, label in DURATIONS.items() %}<option value="{{ k }}" {{ 'selected' if form.duration == k }}>{{ label }}</option>{% endfor %}
+        </select></div>
+      <div><label for="max">Results</label>
+        <select id="max" name="max">
+          {% for n in ['5','10','25','50'] %}<option {{ 'selected' if form.max == n }}>{{ n }}</option>{% endfor %}
+        </select></div>
+    </div>
+  </form>
+</div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+{% if form.q and not error %}
+<div class="card">
+  {% if results %}
+  <form method="post" action="{{ url_for('search_save') }}">
+    <input type="hidden" name="q" value="{{ form.q }}">
+    <div class="row" style="justify-content:space-between;margin-bottom:4px">
+      <h2 style="margin:0">{{ results|length }} results</h2>
+      <div class="actions">
+        <a class="button secondary" href="{{ url_for('new_watch', q=form.q, duration=form.duration) }}">Check this search on a schedule</a>
+        <button type="submit">Save selected</button>
+      </div>
+    </div>
+    {% for v in results %}
+      {% set row = existing.get(v.video_id) %}
+      <label class="result" style="font-weight:inherit">
+        <input type="checkbox" name="video_id" value="{{ v.video_id }}" {{ 'disabled' if row and row.status == 'saved' }}>
+        <img src="https://i.ytimg.com/vi/{{ v.video_id }}/mqdefault.jpg" alt="" loading="lazy">
+        <div class="body">
+          <div class="title">{{ v.title }}</div>
+          <div class="sub">{{ v.channel }} · {{ v.published_at[:10] }} · <a href="{{ v.url }}" target="_blank" rel="noopener">Watch</a></div>
+          {% if row %}<div style="margin-top:4px"><span class="badge {{ row.status }}">{{ status_labels.get(row.status, row.status) }}</span></div>{% endif %}
+        </div>
+        <input type="hidden" name="title_{{ v.video_id }}" value="{{ v.title }}">
+        <input type="hidden" name="channel_{{ v.video_id }}" value="{{ v.channel }}">
+        <input type="hidden" name="published_{{ v.video_id }}" value="{{ v.published_at }}">
+      </label>
+    {% endfor %}
+  </form>
+  {% else %}
+    <div class="empty">No videos found.</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

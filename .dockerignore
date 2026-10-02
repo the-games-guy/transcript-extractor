@@ -1,7 +1,10 @@
 .git
 .env
+.venv
 tests
 deploy
 docs
+data
 **/__pycache__
 .pytest_cache
+*.egg-info

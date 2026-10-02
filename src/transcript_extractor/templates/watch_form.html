@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ 'New schedule' if is_new else 'Edit schedule' }}{% endblock %}
+{% block content %}
+<h1>{{ 'New schedule' if is_new else 'Edit schedule' }}</h1>
+<p class="lead"><a href="{{ url_for('watches') }}">← Back to schedules</a></p>
+<form method="post" class="card stack">
+  <div class="grid">
+    <div><label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{ watch.name or '' }}" required placeholder="AI news"></div>
+    <div><label for="query">Search keywords</label>
+      <input type="text" id="query" name="query" value="{{ watch.query or '' }}" required placeholder="AI news this week"></div>
+  </div>
+
+  <fieldset>
+    <label>How often</label>
+    <div class="choice">
+      {% for k, label in [('interval', 'Every…'), ('daily', 'Daily at…'), ('cron', 'Custom (cron)')] %}
+      <label><input type="radio" name="schedule_kind" value="{{ k }}" {{ 'checked' if watch.schedule_kind == k }}> {{ label }}</label>
+      {% endfor %}
+    </div>
+    <div class="schedule-panel" data-kind="interval">
+      <div class="row">
+        <input type="number" name="every_value" min="1" value="{{ watch.every_value or 6 }}" style="width:100px" aria-label="Interval">
+        <select name="every_unit" style="width:auto" aria-label="Unit">
+          {% for u in ['minutes', 'hours', 'days'] %}<option {{ 'selected' if (watch.every_unit or 'hours') == u }}>{{ u }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="schedule-panel" data-kind="daily">
+      <input type="time" name="daily_time" value="{{ watch.daily_time or '07:00' }}" style="width:auto" aria-label="Time">
+      <span class="hint">{{ settings.timezone }}</span>
+    </div>
+    <div class="schedule-panel" data-kind="cron">
+      <input type="text" name="cron" value="{{ watch.cron or '' }}" placeholder="0 7 * * 1-5" aria-label="Cron expression">
+      <div class="hint">minute hour day-of-month month day-of-week, in {{ settings.timezone }}. <code>0 7 * * 1-5</code> = weekdays at 07:00.</div>
+    </div>
+  </fieldset>
+
+  <div class="grid">
+    <div><label for="max_results">Videos per check</label>
+      <input type="number" id="max_results" name="max_results" min="1" max="50" value="{{ watch.max_results }}"></div>
+    <div><label for="lookback_days">Published in the last (days)</label>
+      <input type="number" id="lookback_days" name="lookback_days" min="1" max="365" value="{{ watch.lookback_days }}"></div>
+    <div><label for="order_by">Sort by</label>
+      <select id="order_by" name="order_by">
+        {% for k, label in ORDERS.items() %}<option value="{{ k }}" {{ 'selected' if watch.order_by == k }}>{{ label }}</option>{% endfor %}
+      </select></div>
+    <div><label for="duration">Length</label>
+      <select id="duration" name="duration">
+        {% for k, label in DURATIONS.items() %}<option value="{{ k }}" {{ 'selected' if (watch.duration or '') == k }}>{{ label }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <div><label for="channel_id">Only this channel (optional)</label>
+    <input type="text" id="channel_id" name="channel_id" value="{{ watch.channel_id or '' }}" placeholder="UCxxxxxxxxxxxxxxxxxxxxxx">
+    <div class="hint">The channel ID starting with UC (not the @handle).</div></div>
+  <label style="font-weight:450;display:flex;gap:8px;align-items:center">
+    <input type="checkbox" name="enabled" value="1" {{ 'checked' if watch.enabled }}> Active</label>
+  <div class="row">
+    <button type="submit">{{ 'Create schedule' if is_new else 'Save changes' }}</button>
+    <a class="button secondary" href="{{ url_for('watches') }}">Cancel</a>
+  </div>
+</form>
+<script>
+  const radios = document.querySelectorAll('input[name=schedule_kind]');
+  function sync() {
+    const kind = document.querySelector('input[name=schedule_kind]:checked')?.value;
+    document.querySelectorAll('.schedule-panel').forEach(p =>
+      p.classList.toggle('active', p.dataset.kind === kind));
+  }
+  radios.forEach(r => r.addEventListener('change', sync));
+  sync();
+</script>
+{% endblock %}

@@ -6,6 +6,7 @@ set -euo pipefail
 
 CTID="${1:-102}"
 OUT=/srv/yt-transcripts
+DATA=/srv/yt-transcripts-data
 KEYRING=/usr/share/keyrings/syncthing-archive-keyring.gpg
 
 ct() { pct exec "$CTID" -- "$@"; }
@@ -33,6 +34,11 @@ ct mkdir -p "$OUT"
 ct bash -c "grep -qxF '.tmp-*' $OUT/.stignore 2>/dev/null || echo '.tmp-*' >> $OUT/.stignore"
 ct chown -R syncthing:syncthing "$OUT"
 ct chmod 2775 "$OUT"
+
+echo "==> CT$CTID: app database folder $DATA (not synced)"
+ct mkdir -p "$DATA"
+ct chown syncthing:syncthing "$DATA"
+ct chmod 700 "$DATA"
 
 echo "==> CT$CTID: service (no default ~/Sync folder)"
 ct mkdir -p /etc/systemd/system/syncthing@syncthing.service.d

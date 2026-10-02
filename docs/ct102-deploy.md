@@ -1,9 +1,13 @@
 # Deploying on CT102, step by step
 
-The app runs in Docker. Syncthing runs natively on CT102 (apt + systemd)
-as the `syncthing` user. The only thing they share is `/srv/yt-transcripts`.
+The app runs in Docker as a small web app (plus the original command line).
+Syncthing runs natively on CT102 (apt + systemd) as the `syncthing` user. The
+only thing they share is `/srv/yt-transcripts`. The app's own database lives in
+`/srv/yt-transcripts-data`, which is not synced.
 
 ```
+LAN    browser ──http://<CT102 LAN IP>:8000 (login)──┐
+                                                      ▼
 CT102  docker: yt-transcripts ──writes as syncthing's UID──> /srv/yt-transcripts
        native: syncthing@syncthing ── folder "yt-transcripts", Send Only ──┐
                                                                             ▼
@@ -52,9 +56,14 @@ pct exec 102 -- mkdir -p /srv/yt-transcripts
 pct exec 102 -- bash -c "echo '.tmp-*' > /srv/yt-transcripts/.stignore"
 pct exec 102 -- chown -R syncthing:syncthing /srv/yt-transcripts
 pct exec 102 -- chmod 2775 /srv/yt-transcripts
+pct exec 102 -- mkdir -p /srv/yt-transcripts-data
+pct exec 102 -- chown syncthing:syncthing /srv/yt-transcripts-data
+pct exec 102 -- chmod 700 /srv/yt-transcripts-data
 ```
 
 `.tmp-*` stops Syncthing from picking up notes that the app is still writing.
+`/srv/yt-transcripts-data` holds the app's database (schedules, history); it must
+stay outside the synced folder.
 
 ## 3. Start Syncthing on CT102
 
@@ -79,13 +88,34 @@ pct exec 102 -- cp /opt/transcript-extractor/.env.example /opt/transcript-extrac
 ST_UID=$(pct exec 102 -- id -u syncthing); ST_GID=$(pct exec 102 -- id -g syncthing)
 echo "uid=$ST_UID gid=$ST_GID"
 pct exec 102 -- sed -i "s/^APP_UID=.*/APP_UID=$ST_UID/; s/^APP_GID=.*/APP_GID=$ST_GID/" /opt/transcript-extractor/.env
-pct exec 102 -- cat /opt/transcript-extractor/.env
 
+CT102_IP=$(pct exec 102 -- hostname -I | awk '{print $1}')
+echo "CT102 LAN IP: $CT102_IP"      # check this is the LAN address, not a docker bridge
+pct exec 102 -- sed -i "s/^BIND_ADDRESS=.*/BIND_ADDRESS=$CT102_IP/" /opt/transcript-extractor/.env
+```
+
+Then set the password (and, for Search and Schedules, the YouTube API key) in
+the file. Open it with:
+
+```bash
+pct exec 102 -- nano /opt/transcript-extractor/.env
+```
+
+Set `APP_PASSWORD=` to a long password and `YOUTUBE_API_KEY=` to your key, check
+`APP_TIMEZONE`, and save. Then check and build:
+
+```bash
+pct exec 102 -- cat /opt/transcript-extractor/.env
 pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose config -q && docker compose build"
 ```
 
+`docker compose config` refuses to continue if `APP_PASSWORD` is empty.
+
 This is its own compose project, so it doesn't touch the dashboards stack.
-It has no ports and isn't routed through Caddy or cloudflared.
+It publishes one port, only on `BIND_ADDRESS` (CT102's LAN IP), so it's reachable
+from your network but not on CT102's other interfaces. It isn't routed through
+Caddy or cloudflared; keep it that way unless you put proper authentication in
+front of it.
 
 ## 5. Smoke test the app (nothing syncs yet)
 
@@ -98,6 +128,16 @@ pct exec 102 -- bash -c "rm /srv/yt-transcripts/*.md"   # don't send the test no
 
 If the fetch fails with a YouTube error, check the network from CT102 and run
 it again. If it says it can't write, the UID/GID in `.env` are wrong.
+
+Then start the web app and check it answers:
+
+```bash
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose up -d && sleep 10 && docker compose ps"   # STATUS: healthy
+pct exec 102 -- ls -ln /srv/yt-transcripts-data   # transcript-extractor.sqlite3 owned by $ST_UID
+```
+
+Open `http://<CT102 LAN IP>:8000` from another machine on your LAN and log in
+with `APP_USERNAME` / `APP_PASSWORD`. Don't add any videos yet.
 
 ## 6. Ignore rules, before the folder exists anywhere
 
@@ -209,6 +249,16 @@ When everything works, remove the snapshot:
 
 ## Day-to-day use
 
+Open `http://<CT102 LAN IP>:8000`:
+
+- **Transcripts:** paste YouTube links; see what's saved, failed or has no captions,
+  and retry failures.
+- **Search:** find videos by keyword (needs `YOUTUBE_API_KEY`) and save the ones you tick.
+- **Schedules:** keyword searches that run automatically and save new videos.
+- **Claude routine:** builds the prompt for the summary task (below).
+
+The original command still works, and shows up on the Transcripts page too:
+
 ```bash
 URL='https://www.youtube.com/watch?v=VIDEO_ID'
 pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts '$URL'"
@@ -217,8 +267,46 @@ pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm
 To update the app:
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && git pull && docker compose build"
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && git pull && docker compose up -d --build"
 ```
+
+## Summaries and email (Claude routine)
+
+New notes have `summary_status: pending` and an empty `## Summary` section. A
+scheduled task in the Claude desktop app on the Mac fills them in:
+
+1. In the web app, open **Claude routine**. Enter the vault path on the Mac
+   (`~/obsidian_vault/tokvault`) and your email, and copy the prompt.
+2. In the Claude desktop app, create a scheduled task with that prompt, give it
+   access to the vault folder, and connect Gmail if you want the digest email.
+3. Run it once by hand. Summarised notes switch to `summary_status: done`.
+
+The routine edits the notes on the Mac. Those edits sync to ZORO and the phone
+as usual; CT102 is Send Only, so its copies stay unsummarised, which is harmless
+because the app never rewrites a note that already exists.
+
+## Upgrading from the command-line-only version
+
+If CT102 already runs the earlier version (no web app):
+
+```bash
+pct exec 102 -- mkdir -p /srv/yt-transcripts-data
+pct exec 102 -- chown syncthing:syncthing /srv/yt-transcripts-data
+pct exec 102 -- chmod 700 /srv/yt-transcripts-data
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && git pull"
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && grep -q '^DATA_DIR=' .env || sed -n '/^DATA_DIR=/,\$p' .env.example >> .env"
+```
+
+The last line appends the new settings from `.env.example` to your `.env`
+without touching `APP_UID`, `APP_GID` or `OUTPUT_DIR`. Then set `BIND_ADDRESS`,
+`APP_PASSWORD` and `YOUTUBE_API_KEY` as in step 4, and start it:
+
+```bash
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose config -q && docker compose up -d --build"
+```
+
+Existing notes are recognised by the video ID in their file name, so they're
+never fetched or overwritten again.
 
 Notes live in `/srv/yt-transcripts`, outside the app folder, so updates and
 rebuilds never touch them.
@@ -237,10 +325,13 @@ Remove the folder on the Mac and the phone in their Syncthing apps.
 
 - Deleting a note in Obsidian doesn't delete CT102's copy, because CT102 is
   Send Only. CT102 shows "Out of Sync", which is harmless. The app won't
-  fetch that video again, since its note still exists on CT102.
+  fetch that video again, since its note still exists on CT102 and it's in
+  the app's history.
 - Transcripts are untrusted third-party text in a vault that Amy can write
   to. Every note has `type: youtube-transcript` in its frontmatter, so it
-  can be recognised as external content.
+  can be recognised as external content. The Claude routine prompt tells
+  Claude to treat transcripts as material to summarise and never follow
+  instructions inside them.
 
 `deploy/ct102/setup-syncthing.sh` does steps 1–3 in one go if you'd rather
 run a script.

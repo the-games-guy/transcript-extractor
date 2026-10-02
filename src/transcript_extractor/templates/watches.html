@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Schedules{% endblock %}
+{% block content %}
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>Schedules</h1>
+    <p class="lead">Keyword searches that run automatically. Each check saves transcripts for videos you don't have yet.</p>
+  </div>
+  <a class="button" href="{{ url_for('new_watch') }}">New schedule</a>
+</div>
+{% if not has_youtube_key %}
+  <div class="banner">Schedules need a YouTube Data API key. Set <code>YOUTUBE_API_KEY</code> and restart.</div>
+{% endif %}
+
+<div class="card">
+  {% for w in watches %}
+    {% set last = last_runs.get(w.id) %}
+    {% set nxt = next_run(w.id) %}
+    <div class="watch">
+      <div style="flex:1;min-width:240px">
+        <div class="title">{{ w.name }}
+          {% if not w.enabled %}<span class="badge">Paused</span>{% endif %}
+          {% if is_running(w.id) %}<span class="badge processing">Checking…</span>{% endif %}
+        </div>
+        <div class="sub">“{{ w.query }}” · {{ describe_schedule(w) }} · up to {{ w.max_results }} videos from the last {{ w.lookback_days }} day{{ 's' if w.lookback_days != 1 }}</div>
+        <div class="watch-meta">
+          <span>Next: {% if nxt %}<span title="{{ nxt | localtime }}">{{ nxt | ago }}</span>{% else %}—{% endif %}</span>
+          <span>Last: {% if last %}<span title="{{ last.started_at | localtime }}">{{ last.started_at | ago }}</span>
+            {% if last.finished_at %} · {{ last.found }} found, {{ last.saved }} saved{% if last.failed %}, {{ last.failed }} not saved{% endif %}{% else %} · running{% endif %}
+            {% else %}never{% endif %}</span>
+        </div>
+        {% if last and last.error %}<div class="err-text">{{ last.error }}</div>{% endif %}
+      </div>
+      <div class="actions">
+        <form class="inline" method="post" action="{{ url_for('run_watch', watch_id=w.id) }}"><button class="secondary small">Run now</button></form>
+        <a class="button secondary small" href="{{ url_for('edit_watch', watch_id=w.id) }}">Edit</a>
+        <form class="inline" method="post" action="{{ url_for('toggle_watch', watch_id=w.id) }}"><button class="secondary small">{{ 'Pause' if w.enabled else 'Resume' }}</button></form>
+        <form class="inline" method="post" action="{{ url_for('delete_watch', watch_id=w.id) }}" onsubmit="return confirm('Delete this schedule? Saved transcripts stay in your vault.')"><button class="danger small">Delete</button></form>
+      </div>
+    </div>
+  {% else %}
+    <div class="empty">No schedules yet. <a href="{{ url_for('new_watch') }}">Create one</a>, or start from a <a href="{{ url_for('search') }}">search</a>.</div>
+  {% endfor %}
+</div>
+<p class="sub">Times shown in {{ settings.timezone }}. Each check uses 100 of your 10,000 free daily YouTube API units.</p>
+{% endblock %}
