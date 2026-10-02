@@ -3,7 +3,7 @@ import base64
 import pytest
 
 from transcript_extractor import web
-from transcript_extractor.youtube import Video
+from transcript_extractor.youtube import Channel, Video
 
 
 class FakeWorker:
@@ -77,7 +77,7 @@ def test_retry_resets_attempts(client, worker):
 
 
 def test_search_and_save(client, worker, monkeypatch):
-    monkeypatch.setattr(web, "search_videos", lambda q, key, **kw: [
+    monkeypatch.setattr(web, "find_videos", lambda q, key, **kw: [
         Video("dQw4w9WgXcQ", "Song", "Rick", "2009-10-25T00:00:00Z")])
     body = client.get("/search?q=rick&days=0").get_data(as_text=True)
     assert "Song" in body and 'value="dQw4w9WgXcQ"' in body
@@ -140,3 +140,95 @@ def test_basic_auth(settings, worker):
     assert client.get("/", headers={"Authorization": f"Basic {good}"}).status_code == 200
     bad = base64.b64encode(b"admin:nope").decode()
     assert client.get("/", headers={"Authorization": f"Basic {bad}"}).status_code == 401
+
+
+CHANNEL = Channel("UC" + "a" * 22, "Veritasium", "@veritasium")
+
+
+def test_search_by_channel(client, worker, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(web, "resolve_channel", lambda value, key: CHANNEL)
+
+    def fake_find(q, key, **kw):
+        seen.update(kw, q=q)
+        return [Video("dQw4w9WgXcQ", "Song", "Veritasium", "2026-09-01T00:00:00Z",
+                      channel_id=CHANNEL.channel_id)]
+
+    monkeypatch.setattr(web, "find_videos", fake_find)
+    body = client.get("/search?channel=@veritasium").get_data(as_text=True)
+    assert seen["q"] == "" and seen["channel_id"] == CHANNEL.channel_id
+    assert seen["order"] == "date"  # a channel on its own defaults to newest uploads
+    assert "Latest uploads" in body and "Save as a schedule" in body
+    assert f"channel={CHANNEL.channel_id}" in body
+
+    client.post("/search/save", data={"q": "", "channel_title": "Veritasium",
+                                      "video_id": ["dQw4w9WgXcQ"]})
+    assert worker.enqueued[-1] == (["dQw4w9WgXcQ"], "search: Veritasium", True)
+
+
+def test_search_results_link_to_channel(client, monkeypatch):
+    monkeypatch.setattr(web, "find_videos", lambda q, key, **kw: [
+        Video("dQw4w9WgXcQ", "Song", "Rick", "2009-10-25T00:00:00Z", channel_id=CHANNEL.channel_id)])
+    body = client.get("/search?q=rick").get_data(as_text=True)
+    assert f"/search?channel={CHANNEL.channel_id}" in body
+    assert "Schedule channel" in body
+
+
+def test_channel_schedule(client, worker, monkeypatch):
+    lookups = []
+
+    def fake_resolve(value, key):
+        lookups.append(value)
+        return CHANNEL
+
+    monkeypatch.setattr(web, "resolve_channel", fake_resolve)
+    form = {"name": "", "query": "", "channel": "https://youtube.com/@veritasium",
+            "schedule_kind": "daily", "daily_time": "07:30", "max_results": "5",
+            "lookback_days": "3", "order_by": "date", "enabled": "1"}
+    assert client.post("/watches/new", data=form).status_code == 302
+    db = client.application.config["DB"]
+    (watch,) = db.list_watches()
+    assert (watch["name"], watch["query"]) == ("Veritasium", "")
+    assert (watch["channel_id"], watch["channel_title"]) == (CHANNEL.channel_id, "Veritasium")
+    assert "all uploads" in client.get("/watches").get_data(as_text=True)
+
+    # Editing without touching the channel doesn't look it up again.
+    edit = client.get(f"/watches/{watch['id']}/edit").get_data(as_text=True)
+    assert 'value="Veritasium"' in edit
+    client.post(f"/watches/{watch['id']}/edit",
+                data={**form, "name": "Veritasium", "channel": "Veritasium", "query": "physics"})
+    watch = db.get_watch(watch["id"])
+    assert watch["query"] == "physics" and watch["channel_id"] == CHANNEL.channel_id
+    assert lookups == ["https://youtube.com/@veritasium"]
+
+    # Clearing the channel needs keywords instead.
+    client.post(f"/watches/{watch['id']}/edit",
+                data={**form, "name": "Veritasium", "channel": "", "query": "physics"})
+    assert db.get_watch(watch["id"])["channel_id"] is None
+
+
+def test_channel_schedule_unknown_channel(client, monkeypatch):
+    def fail(value, key):
+        raise web.YouTubeError("Couldn't find a YouTube channel for 'nope'.")
+
+    monkeypatch.setattr(web, "resolve_channel", fail)
+    resp = client.post("/watches/new", data={"channel": "nope", "schedule_kind": "daily",
+                                             "daily_time": "07:00"})
+    assert resp.status_code == 400
+    body = resp.get_data(as_text=True)
+    assert "Couldn&#39;t find a YouTube channel" in body and 'value="nope"' in body
+
+
+def test_watch_needs_keywords_or_channel():
+    _, errors = web.parse_watch_form({"name": "n", "query": "", "schedule_kind": "daily",
+                                      "daily_time": "07:00"})
+    assert any("keywords, a channel" in e for e in errors)
+
+
+def test_index_filters_by_channel(client):
+    db = client.application.config["DB"]
+    db.upsert_video(Video("dQw4w9WgXcQ", "Song", "Rick"), status="saved", note_path="a.md")
+    db.upsert_video(Video("zzzzzzzzzzz", "Physics", "Veritasium"), status="saved", note_path="b.md")
+    body = client.get("/?channel=Veritasium").get_data(as_text=True)
+    assert "Physics" in body and "Song" not in body
+    assert "Rick (1)" in body and "Veritasium (1)" in body

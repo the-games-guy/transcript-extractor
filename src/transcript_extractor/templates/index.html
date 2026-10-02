@@ -23,10 +23,23 @@
     <h2 style="margin:0">Recent</h2>
     {% if pending %}<span class="sub">Fetching {{ pending }}… this page refreshes itself.</span>{% endif %}
   </div>
+  {% if channels %}
+  <form method="get" action="{{ url_for('index') }}" class="row" style="margin-bottom:12px">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <select name="channel" aria-label="Channel" style="width:auto;max-width:100%" onchange="this.form.submit()">
+      <option value="">All channels</option>
+      {% for c in channels %}<option value="{{ c.channel }}" {{ 'selected' if channel == c.channel }}>{{ c.channel }} ({{ c.n }})</option>{% endfor %}
+      {% if channel and channel not in channels | map(attribute='channel') %}<option selected>{{ channel }}</option>{% endif %}
+    </select>
+    <noscript><button class="secondary small" type="submit">Filter</button></noscript>
+    {% if channel %}<a href="{{ url_for('index', status=status) }}" class="sub">Clear</a>
+      · <a href="{{ url_for('search', channel=channel) }}" class="sub">Latest from this channel</a>{% endif %}
+  </form>
+  {% endif %}
   <div class="tabs">
-    <a href="{{ url_for('index') }}" class="{{ 'active' if not status }}">All</a>
+    <a href="{{ url_for('index', channel=channel) }}" class="{{ 'active' if not status }}">All</a>
     {% for key in ['saved', 'failed', 'no_transcript'] %}
-      <a href="{{ url_for('index', status=key) }}" class="{{ 'active' if status == key }}">
+      <a href="{{ url_for('index', status=key, channel=channel) }}" class="{{ 'active' if status == key }}">
         {{ status_labels[key] }} · {{ counts.get(key, 0) }}</a>
     {% endfor %}
   </div>
@@ -38,7 +51,7 @@
       <tr>
         <td>
           <div class="title"><a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener">{{ v.title or v.video_id }}</a></div>
-          <div class="sub">{{ v.channel }}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
+          <div class="sub">{% if v.channel %}<a href="{{ url_for('index', channel=v.channel) }}" class="muted-link" title="Only this channel">{{ v.channel }}</a>{% endif %}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
           {% if v.error and v.status != 'saved' %}<div class="err-text">{{ v.error }}</div>{% endif %}
         </td>
         <td><span class="badge {{ v.status }}">{{ status_labels.get(v.status, v.status) }}</span></td>

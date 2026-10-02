@@ -148,3 +148,6 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .result img { width: 96px; }
   th.hide-sm, td.hide-sm { display: none; }
 }
+.channel-card { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+a.muted-link { color: inherit; }
+a.muted-link:hover { color: var(--accent); }

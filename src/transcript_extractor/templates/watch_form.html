@@ -6,10 +6,15 @@
 <form method="post" class="card stack">
   <div class="grid">
     <div><label for="name">Name</label>
-      <input type="text" id="name" name="name" value="{{ watch.name or '' }}" required placeholder="AI news"></div>
-    <div><label for="query">Search keywords</label>
-      <input type="text" id="query" name="query" value="{{ watch.query or '' }}" required placeholder="AI news this week"></div>
+      <input type="text" id="name" name="name" value="{{ watch.name or '' }}" placeholder="AI news">
+      <div class="hint">Optional for a channel: it defaults to the channel's name.</div></div>
+    <div><label for="channel">Channel</label>
+      <input type="text" id="channel" name="channel" value="{{ watch.channel or '' }}" placeholder="@handle, channel link, or name">
+      {% if watch.channel_id and watch.channel_title %}<div class="hint">Saved as <a href="https://www.youtube.com/channel/{{ watch.channel_id }}" target="_blank" rel="noopener">{{ watch.channel_title }}</a>.</div>{% endif %}</div>
   </div>
+  <div><label for="query">Search keywords</label>
+    <input type="text" id="query" name="query" value="{{ watch.query or '' }}" placeholder="AI news this week">
+    <div class="hint">Fill in a channel, keywords, or both. A channel with no keywords, sorted by Newest, saves every new upload and costs about 1 API unit per check instead of 100.</div></div>
 
   <fieldset>
     <label>How often</label>
@@ -50,9 +55,6 @@
         {% for k, label in DURATIONS.items() %}<option value="{{ k }}" {{ 'selected' if (watch.duration or '') == k }}>{{ label }}</option>{% endfor %}
       </select></div>
   </div>
-  <div><label for="channel_id">Only this channel (optional)</label>
-    <input type="text" id="channel_id" name="channel_id" value="{{ watch.channel_id or '' }}" placeholder="UCxxxxxxxxxxxxxxxxxxxxxx">
-    <div class="hint">The channel ID starting with UC (not the @handle).</div></div>
   <label style="font-weight:450;display:flex;gap:8px;align-items:center">
     <input type="checkbox" name="enabled" value="1" {{ 'checked' if watch.enabled }}> Active</label>
   <div class="row">

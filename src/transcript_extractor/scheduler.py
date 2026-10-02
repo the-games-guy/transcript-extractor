@@ -14,7 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import ConfigError, Settings
 from .db import Database
 from .pipeline import needs_processing, process_video
-from .youtube import Video, search_videos
+from .youtube import Video, find_videos
 
 log = logging.getLogger(__name__)
 
@@ -164,8 +164,8 @@ class Worker:
             counts = {"found": 0, "new": 0, "saved": 0, "failed": 0}
             try:
                 since = datetime.now(timezone.utc) - timedelta(days=watch["lookback_days"])
-                videos = search_videos(
-                    watch["query"], self.settings.require_youtube_key(),
+                videos = find_videos(
+                    watch["query"] or "", self.settings.require_youtube_key(),
                     max_results=watch["max_results"], published_after=since,
                     order=watch["order_by"], channel_id=watch["channel_id"] or None,
                     video_duration=watch["duration"] or None,

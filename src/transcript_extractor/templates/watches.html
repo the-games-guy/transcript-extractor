@@ -4,7 +4,7 @@
 <div class="row" style="justify-content:space-between;align-items:flex-start">
   <div>
     <h1>Schedules</h1>
-    <p class="lead">Keyword searches that run automatically. Each check saves transcripts for videos you don't have yet.</p>
+    <p class="lead">Channels and keyword searches that run automatically. Each check saves transcripts for videos you don't have yet.</p>
   </div>
   <a class="button" href="{{ url_for('new_watch') }}">New schedule</a>
 </div>
@@ -22,7 +22,7 @@
           {% if not w.enabled %}<span class="badge">Paused</span>{% endif %}
           {% if is_running(w.id) %}<span class="badge processing">Checking…</span>{% endif %}
         </div>
-        <div class="sub">“{{ w.query }}” · {{ describe_schedule(w) }} · up to {{ w.max_results }} videos from the last {{ w.lookback_days }} day{{ 's' if w.lookback_days != 1 }}</div>
+        <div class="sub">{% if w.channel_id %}<a href="{{ url_for('index', channel=w.channel_title) if w.channel_title else 'https://www.youtube.com/channel/' ~ w.channel_id }}">{{ w.channel_title or w.channel_id }}</a>{% if w.query %} · {% endif %}{% endif %}{% if w.query %}“{{ w.query }}”{% elif w.channel_id %} · all uploads{% endif %} · {{ describe_schedule(w) }} · up to {{ w.max_results }} videos from the last {{ w.lookback_days }} day{{ 's' if w.lookback_days != 1 }}</div>
         <div class="watch-meta">
           <span>Next: {% if nxt %}<span title="{{ nxt | localtime }}">{{ nxt | ago }}</span>{% else %}—{% endif %}</span>
           <span>Last: {% if last %}<span title="{{ last.started_at | localtime }}">{{ last.started_at | ago }}</span>
@@ -42,5 +42,5 @@
     <div class="empty">No schedules yet. <a href="{{ url_for('new_watch') }}">Create one</a>, or start from a <a href="{{ url_for('search') }}">search</a>.</div>
   {% endfor %}
 </div>
-<p class="sub">Times shown in {{ settings.timezone }}. Each check uses 100 of your 10,000 free daily YouTube API units.</p>
+<p class="sub">Times shown in {{ settings.timezone }}. A keyword check uses 100 of your 10,000 free daily YouTube API units; a channel's uploads (no keywords, sorted by Newest) use about 1.</p>
 {% endblock %}

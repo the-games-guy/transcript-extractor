@@ -253,8 +253,9 @@ Open `http://<CT102 LAN IP>:8000`:
 
 - **Transcripts:** paste YouTube links; see what's saved, failed or has no captions,
   and retry failures.
-- **Search:** find videos by keyword (needs `YOUTUBE_API_KEY`) and save the ones you tick.
-- **Schedules:** keyword searches that run automatically and save new videos.
+- **Search:** find videos by keyword, by channel, or both (needs `YOUTUBE_API_KEY`) and
+  save the ones you tick.
+- **Schedules:** channels and keyword searches that run automatically and save new videos.
 - **Claude routine:** builds the prompt for the summary task (below).
 
 The original command still works, and shows up on the Transcripts page too:
