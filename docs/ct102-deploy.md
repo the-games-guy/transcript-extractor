@@ -40,7 +40,8 @@ pct exec 102 -- /usr/bin/syncthing --version
 
 2.x and ZORO's 1.29.2 can sync with each other. If `madison` lists a 1.29
 build and you'd rather match ZORO, install it with
-`apt-get install -y syncthing=<that version>`.
+`apt-get install -y syncthing=VERSION`, using the exact version string
+`madison` printed.
 
 ## 2. Create the user and the output folder
 
@@ -187,14 +188,20 @@ ZORO if the phone appears in the list above.
 ## 9. Verify end to end
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts <a real video url>"
+URL='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts '$URL'"
 sleep 20
 pct exec 100 -- ls -la "/home/zoro/.hermes/profiles/assistant/skills/_vault/tokvault/YouTube Transcripts/"
-pct exec 100 -- docker ps --filter name=hermes                                  # copy the sandbox id
-pct exec 100 -- docker exec <id> ls "/root/vault/YouTube Transcripts/"
+pct exec 100 -- bash -c 'for c in $(docker ps -q --filter name=hermes); do echo "== $c"; docker exec "$c" ls "/root/vault/YouTube Transcripts/" 2>&1; done'
 ```
 
+There may be more than one Hermes container. Only the one with Amy's vault
+mount lists the note; the others report "No such file or directory".
+
 Then check that the note shows up in Obsidian on the Mac and on the phone.
+Remove the test note with
+`pct exec 102 -- bash -c "rm /srv/yt-transcripts/*dQw4w9WgXcQ*"`. CT102 is
+Send Only, so the deletion reaches every device.
 On CT102, `ls -ln /srv/yt-transcripts` should show `$ST_UID` as the owner.
 
 When everything works, remove the snapshot:
@@ -203,7 +210,8 @@ When everything works, remove the snapshot:
 ## Day-to-day use
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts <url> [<url> ...]"
+URL='https://www.youtube.com/watch?v=VIDEO_ID'
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts '$URL'"
 ```
 
 To update the app:
