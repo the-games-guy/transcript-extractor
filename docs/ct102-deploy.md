@@ -40,7 +40,8 @@ pct exec 102 -- /usr/bin/syncthing --version
 
 2.x and ZORO's 1.29.2 can sync with each other. If `madison` lists a 1.29
 build and you'd rather match ZORO, install it with
-`apt-get install -y syncthing=<that version>`.
+`apt-get install -y syncthing=VERSION`, using the exact version string
+`madison` printed.
 
 ## 2. Create the user and the output folder
 
@@ -152,37 +153,55 @@ pct exec 100 -- grep 'folder id="yt-transcripts"' /home/zoro/.local/state/syncth
 pct exec 100 -- ls -la "/home/zoro/.hermes/profiles/assistant/skills/_vault/tokvault/YouTube Transcripts/"   # has .stfolder, no extra nested folder
 ```
 
-## 8. Share from ZORO to the Mac and the phone
+## 8. Share with the Mac and the phone
 
-List the devices ZORO already knows about, then add the Mac and phone to the
-new folder:
+List the devices ZORO is paired with:
 
 ```bash
 pct exec 100 -- grep -o '<device id="[^"]*" name="[^"]*"' /home/zoro/.local/state/syncthing/config.xml | sort -u
-MAC_ID=<paste the Mac's id>
-PHONE_ID=<paste the phone's id>
-pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $MAC_ID"
-pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $PHONE_ID"
 ```
+
+Set `MAC_ID` to the Mac's ID from that list, replacing the whole value, then
+share the folder with it:
+
+```bash
+MAC_ID=XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
+pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $MAC_ID"
+pct exec 100 -- sed -n '/<folder id="yt-transcripts"/,/<\/folder>/p' /home/zoro/.local/state/syncthing/config.xml | grep 'device id'
+```
+
+The last command should list three devices: ZORO, CT102 and the Mac.
+
+Syncthing silently ignores a device ID that isn't in ZORO's device list. The
+command still succeeds, but nothing is shared. So only add the phone from
+ZORO if the phone appears in the list above.
 
 - **Mac:** the Syncthing GUI (http://127.0.0.1:8384) shows "ZORO wants to
   share folder YouTube Transcripts". Click *Add*, and on the *General* tab set
   the folder path to `/Users/tok/obsidian_vault/tokvault/YouTube Transcripts`
   before saving.
-- **Phone:** accept the folder and point it at the `YouTube Transcripts`
-  folder inside the vault.
+- **Phone:** if the phone is paired with the Mac rather than ZORO, share it
+  from the Mac. In the Mac GUI, edit *YouTube Transcripts*, open the *Sharing*
+  tab, tick the phone and save. Then accept the folder on the phone into the
+  vault's `YouTube Transcripts` folder.
 
 ## 9. Verify end to end
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts <a real video url>"
+URL='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts '$URL'"
 sleep 20
 pct exec 100 -- ls -la "/home/zoro/.hermes/profiles/assistant/skills/_vault/tokvault/YouTube Transcripts/"
-pct exec 100 -- docker ps --filter name=hermes                                  # copy the sandbox id
-pct exec 100 -- docker exec <id> ls "/root/vault/YouTube Transcripts/"
+pct exec 100 -- bash -c 'for c in $(docker ps -q --filter name=hermes); do echo "== $c"; docker exec "$c" ls "/root/vault/YouTube Transcripts/" 2>&1; done'
 ```
 
+There may be more than one Hermes container. Only the one with Amy's vault
+mount lists the note; the others report "No such file or directory".
+
 Then check that the note shows up in Obsidian on the Mac and on the phone.
+Remove the test note with
+`pct exec 102 -- bash -c "rm /srv/yt-transcripts/*dQw4w9WgXcQ*"`. CT102 is
+Send Only, so the deletion reaches every device.
 On CT102, `ls -ln /srv/yt-transcripts` should show `$ST_UID` as the owner.
 
 When everything works, remove the snapshot:
@@ -191,7 +210,8 @@ When everything works, remove the snapshot:
 ## Day-to-day use
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts <url> [<url> ...]"
+URL='https://www.youtube.com/watch?v=VIDEO_ID'
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm yt-transcripts '$URL'"
 ```
 
 To update the app:
