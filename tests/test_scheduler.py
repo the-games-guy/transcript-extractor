@@ -45,7 +45,7 @@ def test_run_watch_processes_only_new(monkeypatch, settings, db):
         db.upsert_video(video, status=status, source=source, watch_id=watch_id)
         return status
 
-    monkeypatch.setattr(scheduler, "search_videos", fake_search)
+    monkeypatch.setattr(scheduler, "find_videos", fake_search)
     monkeypatch.setattr(scheduler, "process_video", fake_process)
     db.upsert_video(videos[0], status="saved")  # already have A
 

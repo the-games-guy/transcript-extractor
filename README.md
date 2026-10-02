@@ -8,10 +8,10 @@ notes and emails a digest.
 It runs in Docker as a small web app with a login:
 
 - **Transcripts:** paste YouTube links (watch, `youtu.be`, Shorts, live); see what's
-  saved, failed, or has no captions, and retry failures
-- **Search:** find videos by keyword and save the ones you tick
-- **Schedules:** keyword searches that run automatically (every N hours, daily at a
-  time, or cron) and save any new videos
+  saved, failed, or has no captions, and retry failures; filter by channel
+- **Search:** find videos by keyword, by channel, or both, and save the ones you tick
+- **Schedules:** channels and keyword searches that run automatically (every N hours,
+  daily at a time, or cron) and save any new videos
 - **Claude routine:** builds the prompt for a Claude desktop scheduled task that
   writes summaries into the notes and emails them
 
@@ -88,13 +88,29 @@ Everything is set in `.env` (copy `.env.example`):
 | `TRANSCRIPT_LANGUAGES` | Preferred transcript languages, in order (default `en`). |
 | `NOTE_TAGS` | Tags on every note (default `youtube,transcript`). |
 
+## Channels
+
+Anywhere the app asks for a channel you can type an `@handle`, paste a channel link
+(`youtube.com/@name`, `/channel/UC…`, `/c/…`, `/user/…`), or type the channel's name.
+
+- On **Search**, a channel on its own lists its latest uploads; add keywords to search
+  inside it. Each result's channel name opens that channel, and **Schedule channel**
+  starts a schedule for it.
+- A **schedule** can be a channel, keywords, or both. Leave the name blank and it uses
+  the channel's name.
+- On **Transcripts**, pick a channel from the list (or click a channel name) to see
+  only its videos.
+
 ## Limits
 
 - YouTube sometimes blocks transcript requests (`RequestBlocked` / `IpBlocked`).
   Those show as **Failed** and are retried automatically (up to 5 attempts) or with
   **Retry**. Videos without captions show as **No transcript**.
-- Each search costs 100 of the free 10,000 daily YouTube API units. Schedules can't
-  run more often than every 15 minutes.
+- Each keyword search costs 100 of the free 10,000 daily YouTube API units. A channel
+  with no keywords, sorted by Newest, reads the channel's upload list instead: about
+  1 unit (2 with a length filter), and it never misses an upload. Looking up a channel
+  by handle or link costs 1 unit; by name it can cost 100. Schedules can't run more
+  often than every 15 minutes.
 - The UI has a login but no CSRF tokens. Keep it on the LAN (`BIND_ADDRESS`), not
   behind Caddy or cloudflared, unless you add proper authentication in front.
 

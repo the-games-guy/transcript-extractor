@@ -20,7 +20,9 @@ from .config import ConfigError, Settings
 from .db import PENDING_STATUSES, Database
 from .notes import SUMMARY_PLACEHOLDER
 from .scheduler import MIN_INTERVAL_MINUTES, UNITS, Worker, describe_schedule
-from .youtube import Video, YouTubeError, parse_video_id, search_videos
+from .youtube import (
+    Channel, Video, YouTubeError, find_videos, parse_video_id, resolve_channel,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,14 +69,14 @@ def parse_watch_form(form) -> tuple[dict, list[str]]:
         "max_results": as_int("max_results", 5, 1, 50, "Videos per check"),
         "lookback_days": as_int("lookback_days", 7, 1, 365, "Look-back window"),
         "order_by": form.get("order_by") if form.get("order_by") in ORDERS else "date",
-        "channel_id": (form.get("channel_id") or "").strip() or None,
+        "channel": (form.get("channel") or "").strip(),
         "duration": form.get("duration") if form.get("duration") in DURATIONS else "",
         "enabled": 1 if form.get("enabled") else 0,
     }
-    if not data["name"]:
+    if not data["name"] and not data["channel"]:  # a channel schedule defaults to its name
         errors.append("Give the watch a name.")
-    if not data["query"]:
-        errors.append("Enter search keywords.")
+    if not data["query"] and not data["channel"]:
+        errors.append("Enter search keywords, a channel, or both.")
 
     kind = data["schedule_kind"]
     if kind == "interval":
@@ -174,6 +176,28 @@ def create_app(settings: Settings, *, start_worker: bool = True,
             "ORDERS": ORDERS, "DURATIONS": DURATIONS, "describe_schedule": describe_schedule,
         }
 
+    def lookup_channel(value: str, known: dict | None = None) -> Channel:
+        """Resolve a typed channel, reusing `known` (a watch row) when it's unchanged."""
+        if known and known.get("channel_id") and known.get("channel_title") \
+                and value in (known["channel_id"], known["channel_title"]):
+            return Channel(known["channel_id"], known.get("channel_title") or "")
+        return resolve_channel(value, settings.require_youtube_key())
+
+    def save_watch_channel(data: dict, errors: list[str], known: dict | None = None) -> None:
+        """Swap the form's free-text `channel` for a resolved channel_id/channel_title."""
+        value = data.get("channel", "")  # kept for re-rendering the form
+        data["channel_id"] = data["channel_title"] = None
+        if not value or errors:
+            return
+        try:
+            channel = lookup_channel(value, known)
+        except (ConfigError, YouTubeError) as exc:
+            errors.append(str(exc))
+            return
+        data["channel_id"], data["channel_title"] = channel.channel_id, channel.title
+        if not data["name"]:
+            data["name"] = channel.title
+
     # --- pages ---------------------------------------------------------------
 
     @app.get("/")
@@ -181,11 +205,14 @@ def create_app(settings: Settings, *, start_worker: bool = True,
         status = request.args.get("status") or None
         if status not in STATUS_LABELS:
             status = None
-        videos = db.recent_videos(limit=100, status=status)
-        counts = db.status_counts()
-        pending = sum(counts.get(s, 0) for s in PENDING_STATUSES)
+        channel = (request.args.get("channel") or "").strip() or None
+        videos = db.recent_videos(limit=100, status=status, channel=channel)
+        counts = db.status_counts(channel=channel)
+        all_counts = db.status_counts() if channel else counts
+        pending = sum(all_counts.get(s, 0) for s in PENDING_STATUSES)
         return render_template("index.html", videos=videos, counts=counts,
-                               pending=pending, status=status)
+                               pending=pending, status=status, channel=channel,
+                               channels=db.channels())
 
     @app.post("/videos")
     def add_videos():
@@ -222,21 +249,26 @@ def create_app(settings: Settings, *, start_worker: bool = True,
     @app.get("/search")
     def search():
         q = (request.args.get("q") or "").strip()
+        channel_input = (request.args.get("channel") or "").strip()
         form = {
             "q": q,
+            "channel": channel_input,
             "days": request.args.get("days", "30"),
             "order": request.args.get("order") if request.args.get("order") in ORDERS
-            else "relevance",
+            else ("date" if channel_input and not q else "relevance"),
             "duration": request.args.get("duration") if request.args.get("duration")
             in DURATIONS else "",
             "max": request.args.get("max", "10"),
         }
-        results, error, existing = [], None, {}
-        if q:
+        results, error, existing, channel = [], None, {}, None
+        if q or channel_input:
             try:
+                if channel_input:
+                    channel = resolve_channel(channel_input, settings.require_youtube_key())
                 days = int(form["days"] or 0)
-                results = search_videos(
+                results = find_videos(
                     q, settings.require_youtube_key(),
+                    channel_id=channel.channel_id if channel else None,
                     max_results=int(form["max"] or 10),
                     published_after=(datetime.now(timezone.utc) - timedelta(days=days))
                     if days else None,
@@ -249,7 +281,7 @@ def create_app(settings: Settings, *, start_worker: bool = True,
                 log.exception("Search failed")
                 error = f"Search failed: {type(exc).__name__}: {exc}"
         return render_template("search.html", form=form, results=results, error=error,
-                               existing=existing)
+                               existing=existing, channel=channel)
 
     @app.post("/search/save")
     def search_save():
@@ -265,7 +297,9 @@ def create_app(settings: Settings, *, start_worker: bool = True,
             flash("Tick at least one video to save.", "error")
             return redirect(request.referrer or url_for("search"))
         query = request.form.get("q", "")
-        queued, skipped = worker.enqueue(videos, source=f"search: {query}" if query else "search",
+        channel = request.form.get("channel_title", "")
+        label = " in ".join(part for part in (query, channel) if part)
+        queued, skipped = worker.enqueue(videos, source=f"search: {label}" if label else "search",
                                          force=True)
         _flash_queue(queued, skipped)
         return redirect(url_for("index"))
@@ -280,6 +314,7 @@ def create_app(settings: Settings, *, start_worker: bool = True,
     def new_watch():
         if request.method == "POST":
             data, errors = parse_watch_form(request.form)
+            save_watch_channel(data, errors)
             if not errors:
                 try:
                     watch_id = db.create_watch(data)
@@ -294,11 +329,14 @@ def create_app(settings: Settings, *, start_worker: bool = True,
             for e in errors:
                 flash(e, "error")
             return render_template("watch_form.html", watch=data, is_new=True), 400
+        q, channel = request.args.get("q", ""), request.args.get("channel", "")
+        channel_title = request.args.get("channel_title", "")
         defaults = {
-            "name": request.args.get("q", ""), "query": request.args.get("q", ""),
+            "name": " in ".join(p for p in (q, channel_title) if p),
+            "query": q, "channel": channel, "channel_title": channel_title,
             "schedule_kind": "interval", "every_value": 6, "every_unit": "hours",
             "daily_time": "07:00", "cron": "", "max_results": 5, "lookback_days": 7,
-            "order_by": "date", "channel_id": "", "duration": request.args.get("duration", ""),
+            "order_by": "date", "duration": request.args.get("duration", ""),
             "enabled": 1,
         }
         return render_template("watch_form.html", watch=defaults, is_new=True)
@@ -308,6 +346,7 @@ def create_app(settings: Settings, *, start_worker: bool = True,
         watch = db.get_watch(watch_id) or abort(404)
         if request.method == "POST":
             data, errors = parse_watch_form(request.form)
+            save_watch_channel(data, errors, known=dict(watch))
             if not errors:
                 try:
                     db.update_watch(watch_id, data)
@@ -323,7 +362,9 @@ def create_app(settings: Settings, *, start_worker: bool = True,
                 flash(e, "error")
             return render_template("watch_form.html", watch={**data, "id": watch_id},
                                    is_new=False), 400
-        return render_template("watch_form.html", watch=dict(watch), is_new=False)
+        row = dict(watch)
+        row["channel"] = row["channel_title"] or row["channel_id"] or ""
+        return render_template("watch_form.html", watch=row, is_new=False)
 
     @app.post("/watches/<int:watch_id>/toggle")
     def toggle_watch(watch_id):

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS watches (
     lookback_days INTEGER NOT NULL DEFAULT 7,
     order_by      TEXT NOT NULL DEFAULT 'date',
     channel_id    TEXT,
+    channel_title TEXT,
     duration      TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
@@ -59,8 +60,11 @@ CREATE INDEX IF NOT EXISTS runs_watch ON runs(watch_id, started_at DESC);
 
 WATCH_FIELDS = [
     "name", "query", "schedule_kind", "every_value", "every_unit", "daily_time", "cron",
-    "max_results", "lookback_days", "order_by", "channel_id", "duration", "enabled",
+    "max_results", "lookback_days", "order_by", "channel_id", "channel_title", "duration", "enabled",
 ]
+
+# Columns added after the first release: (table, column, type).
+MIGRATIONS = [("watches", "channel_title", "TEXT")]
 
 PENDING_STATUSES = ("queued", "processing")
 
@@ -77,6 +81,10 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            for table, column, kind in MIGRATIONS:
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     @contextmanager
     def connect(self):
@@ -166,19 +174,38 @@ class Database:
             ).fetchall()
         return {r["video_id"]: r for r in rows}
 
-    def recent_videos(self, limit: int = 50, status: str | None = None) -> list[sqlite3.Row]:
-        sql, args = "SELECT * FROM videos", []
+    def recent_videos(self, limit: int = 50, status: str | None = None,
+                      channel: str | None = None) -> list[sqlite3.Row]:
+        where, args = [], []
         if status:
-            sql += " WHERE status = ?"
+            where.append("status = ?")
             args.append(status)
+        if channel:
+            where.append("channel = ?")
+            args.append(channel)
+        sql = "SELECT * FROM videos"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         with self.connect() as conn:
             return conn.execute(sql, args + [limit]).fetchall()
 
-    def status_counts(self) -> dict[str, int]:
+    def status_counts(self, channel: str | None = None) -> dict[str, int]:
+        sql, args = "SELECT status, COUNT(*) AS n FROM videos", []
+        if channel:
+            sql += " WHERE channel = ?"
+            args.append(channel)
         with self.connect() as conn:
-            rows = conn.execute("SELECT status, COUNT(*) AS n FROM videos GROUP BY status")
+            rows = conn.execute(sql + " GROUP BY status", args)
             return {r["status"]: r["n"] for r in rows}
+
+    def channels(self) -> list[sqlite3.Row]:
+        """Channels with saved transcripts, most notes first."""
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT channel, COUNT(*) AS n FROM videos WHERE channel != '' AND status = 'saved' "
+                "GROUP BY channel ORDER BY n DESC, channel COLLATE NOCASE"
+            ).fetchall()
 
     def pending_video_ids(self) -> list[str]:
         with self.connect() as conn:
