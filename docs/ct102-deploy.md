@@ -85,7 +85,8 @@ pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose config -
 ```
 
 This is its own compose project, so it doesn't touch the dashboards stack.
-It has no ports and isn't routed through Caddy or cloudflared.
+It isn't routed through Caddy or cloudflared. The web UI (step 10) publishes
+port 8080 on CT102's `127.0.0.1` only.
 
 ## 5. Smoke test the app (nothing syncs yet)
 
@@ -207,7 +208,32 @@ On CT102, `ls -ln /srv/yt-transcripts` should show `$ST_UID` as the owner.
 When everything works, remove the snapshot:
 `pct delsnapshot 102 pre-yt-transcripts`.
 
+## 10. Start the web UI (optional)
+
+```bash
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose up -d ui"
+pct exec 102 -- ss -ltn | grep 8080             # expect: 127.0.0.1:8080 only
+pct exec 102 -- curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/   # expect: 200
+```
+
+The UI has no login, and anyone who can reach it can make CT102 fetch
+transcripts into the vault. So it only listens on CT102's loopback. To use
+it, open an SSH tunnel from the **Mac** (set `CT102_SSH` to however you SSH
+into CT102, e.g. `root@192.168.1.50`):
+
+```bash
+CT102_SSH=root@ct102
+ssh -N -L 8080:127.0.0.1:8080 "$CT102_SSH"
+```
+
+and browse to http://127.0.0.1:8080 while it runs. If CT102 has a LAN-only
+address, you can instead set `UI_BIND` in `.env` to that address and run
+`docker compose up -d ui` again. Never set it to `0.0.0.0`: CT102 is
+internet-exposed.
+
 ## Day-to-day use
+
+Paste URLs into the web UI, or from the Proxmox host:
 
 ```bash
 URL='https://www.youtube.com/watch?v=VIDEO_ID'
@@ -217,8 +243,10 @@ pct exec 102 -- bash -c "cd /opt/transcript-extractor && docker compose run --rm
 To update the app:
 
 ```bash
-pct exec 102 -- bash -c "cd /opt/transcript-extractor && git pull && docker compose build"
+pct exec 102 -- bash -c "cd /opt/transcript-extractor && git pull && docker compose build && docker compose up -d ui"
 ```
+
+If you don't use the web UI, leave off `&& docker compose up -d ui`.
 
 Notes live in `/srv/yt-transcripts`, outside the app folder, so updates and
 rebuilds never touch them.

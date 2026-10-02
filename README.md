@@ -15,6 +15,19 @@ docker compose run --rm yt-transcripts https://youtu.be/<id> [<url> ...]
   Syncthing never syncs a half-written note.
 - `TRANSCRIPT_LANGUAGES` (default `en`) sets preferred languages, in order.
 
+## Web UI
+
+```bash
+docker compose up -d        # http://127.0.0.1:8080 on CT102
+```
+
+Paste URLs to fetch transcripts, then browse, filter and preview the notes.
+It has no login, so by default it listens on CT102's loopback only; reach it
+through an SSH tunnel (see the deploy doc). `UI_BIND` and `UI_PORT` in `.env`
+change the address and port.
+
+Without Docker: `OUTPUT_DIR=./notes python -m transcript_extractor.web`.
+
 Deployment on CT102: [docs/ct102-deploy.md](docs/ct102-deploy.md).
 
 ## Development

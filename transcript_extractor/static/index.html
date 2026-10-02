@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YouTube Transcripts</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --border: #e2e2dc; --accent: #c4302b; --accent-text: #ffffff;
+    --ok: #2f7d4f; --skip: #8a6d1f; --err: #b3261e; --hover: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ecece8; --muted: #9a9a93;
+      --border: #33332f; --accent: #e0443e; --accent-text: #ffffff;
+      --ok: #6cc28f; --skip: #d9b45a; --err: #f08a83; --hover: #2a2a27;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 20px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  textarea, input[type=search] {
+    width: 100%; font: inherit; color: inherit; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  }
+  textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 8px;
+    padding: 9px 18px; background: var(--accent); color: var(--accent-text); cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .results { list-style: none; margin: 12px 0 0; padding: 0; }
+  .results:empty { display: none; }
+  .results li { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .tag { font-size: 12px; font-weight: 700; min-width: 52px; text-transform: uppercase; }
+  .tag.wrote { color: var(--ok); } .tag.skip { color: var(--skip); }
+  .tag.error { color: var(--err); } .tag.working { color: var(--muted); }
+  .results .msg { word-break: break-word; }
+  .notes { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .notes { grid-template-columns: minmax(0, 1fr); } }
+  .list { list-style: none; margin: 12px 0 0; padding: 0; max-height: 70vh; overflow-y: auto; }
+  .list li button {
+    all: unset; display: block; width: 100%; padding: 8px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 14px; word-break: break-word;
+  }
+  .list li button:hover, .list li button[aria-current=true] { background: var(--hover); }
+  .list .when { display: block; color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 2px; }
+  #preview h3 { font-size: 18px; margin: 0 0 4px; }
+  #preview .meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  #preview .meta a { color: inherit; }
+  #preview p { margin: 0 0 12px; }
+  #preview p a { color: var(--accent); font-family: ui-monospace, monospace; font-size: 13px; text-decoration: none; margin-right: 6px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  .toolbar button { background: var(--hover); color: var(--text); font-weight: 500; padding: 6px 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>YouTube Transcripts</h1>
+
+  <section class="panel">
+    <h2>Fetch transcripts</h2>
+    <textarea id="urls" placeholder="Paste YouTube URLs or video IDs, one per line" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="fetch">Fetch</button>
+      <label><input type="checkbox" id="force"> Rewrite notes that already exist</label>
+    </div>
+    <ul class="results" id="results"></ul>
+  </section>
+
+  <div class="notes">
+    <section class="panel">
+      <h2>Notes <span id="count" class="when"></span></h2>
+      <input type="search" id="filter" placeholder="Filter by title">
+      <ul class="list" id="list"></ul>
+    </section>
+    <section class="panel" id="preview">
+      <p class="empty">Select a note to preview it.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let notes = [];
+let selected = null;
+let rawNote = "";
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  Object.assign(node, props);
+  node.append(...children);
+  return node;
+}
+
+function when(seconds) {
+  return new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+async function loadNotes() {
+  const resp = await fetch("/api/notes");
+  notes = (await resp.json()).notes || [];
+  renderList();
+}
+
+function renderList() {
+  const q = $("filter").value.trim().toLowerCase();
+  const shown = notes.filter((n) => n.name.toLowerCase().includes(q));
+  $("count").textContent = `(${notes.length})`;
+  const list = $("list");
+  list.replaceChildren();
+  if (!shown.length) {
+    list.append(el("li", { className: "empty", textContent: notes.length ? "No matches." : "No notes yet." }));
+    return;
+  }
+  for (const n of shown) {
+    const btn = el("button", {}, n.name.replace(/\.md$/, ""), el("span", { className: "when", textContent: when(n.modified) }));
+    btn.setAttribute("aria-current", String(n.name === selected));
+    btn.addEventListener("click", () => openNote(n.name));
+    list.append(el("li", {}, btn));
+  }
+}
+
+// Notes are always in the shape markdown.py writes: frontmatter, a title,
+// a channel link, then paragraphs that start with a timestamp link.
+const LINK = /^\[([^\]]+)\]\((https:\/\/www\.youtube\.com\/[^)\s]+)\)\s?(.*)$/;
+
+async function openNote(name) {
+  selected = name;
+  renderList();
+  const resp = await fetch("/api/notes/" + encodeURIComponent(name));
+  const preview = $("preview");
+  if (!resp.ok) {
+    preview.replaceChildren(el("p", { className: "empty", textContent: "Could not load this note." }));
+    return;
+  }
+  rawNote = await resp.text();
+  let body = rawNote;
+  const meta = {};
+  const fm = body.match(/^---\n([\s\S]*?)\n---\n/);
+  if (fm) {
+    for (const line of fm[1].split("\n")) {
+      const i = line.indexOf(":");
+      if (i > 0) {
+        let v = line.slice(i + 1).trim();
+        try { v = JSON.parse(v); } catch {}
+        meta[line.slice(0, i)] = v;
+      }
+    }
+    body = body.slice(fm[0].length);
+  }
+
+  const copy = el("button", { textContent: "Copy markdown" });
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(rawNote); copy.textContent = "Copied"; }
+    catch { copy.textContent = "Copy failed"; }
+    setTimeout(() => (copy.textContent = "Copy markdown"), 1500);
+  });
+  const parts = [el("div", { className: "toolbar" }, copy)];
+
+  const metaLine = el("div", { className: "meta" });
+  if (typeof meta.url === "string" && meta.url.startsWith("https://www.youtube.com/")) {
+    metaLine.append(el("a", { href: meta.url, target: "_blank", rel: "noopener", textContent: meta.channel || "YouTube" }));
+  }
+  const bits = [meta.language, meta.auto_generated === true ? "auto-generated captions" : null, meta.fetched && `fetched ${meta.fetched}`].filter(Boolean);
+  if (bits.length) metaLine.append(" · " + bits.join(" · "));
+
+  let titleShown = false;
+  for (const line of body.split("\n")) {
+    if (!line.trim()) continue;
+    if (!titleShown && line.startsWith("# ")) {
+      parts.push(el("h3", { textContent: line.slice(2) }), metaLine);
+      titleShown = true;
+      continue;
+    }
+    const m = line.match(LINK);
+    if (m && !m[3]) continue; // the channel link, already in the meta line
+    if (m) {
+      parts.push(el("p", {}, el("a", { href: m[2], target: "_blank", rel: "noopener", textContent: m[1] }), m[3]));
+    } else {
+      parts.push(el("p", { textContent: line }));
+    }
+  }
+  if (!titleShown) parts.splice(1, 0, el("h3", { textContent: name }), metaLine);
+  preview.replaceChildren(...parts);
+}
+
+async function fetchAll() {
+  const lines = $("urls").value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  if (!lines.length) return;
+  const force = $("force").checked;
+  const button = $("fetch");
+  button.disabled = true;
+  const results = $("results");
+  results.replaceChildren();
+  // One request per video so each result shows up as soon as it's ready.
+  for (const url of lines) {
+    const tag = el("span", { className: "tag working", textContent: "…" });
+    const msg = el("span", { className: "msg", textContent: url });
+    results.append(el("li", {}, tag, msg));
+    let r;
+    try {
+      const resp = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, force }),
+      });
+      r = await resp.json();
+      if (!resp.ok) r = { status: "error", message: r.error || resp.statusText };
+    } catch (e) {
+      r = { status: "error", message: String(e) };
+    }
+    tag.className = "tag " + r.status;
+    tag.textContent = r.status;
+    msg.textContent = r.status === "error" ? `${url}: ${r.message}`
+      : r.status === "skip" ? `${r.message} (already exists)` : r.message;
+    if (r.status === "wrote") await loadNotes();
+  }
+  button.disabled = false;
+  $("urls").value = "";
+}
+
+$("fetch").addEventListener("click", fetchAll);
+$("urls").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) fetchAll();
+});
+$("filter").addEventListener("input", renderList);
+loadNotes();
+</script>
+</body>
+</html>

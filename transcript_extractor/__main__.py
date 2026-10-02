@@ -8,12 +8,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date
 from pathlib import Path
 
-from youtube_transcript_api import YouTubeTranscriptApiException
-
-from . import markdown, writer, youtube
+from .extract import check_output_dir, extract, parse_languages
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,38 +32,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.output.is_dir():
-        print(f"error: output folder {args.output} does not exist", file=sys.stderr)
-        return 2
-    if not os.access(args.output, os.W_OK):
-        print(
-            f"error: cannot write to {args.output} as uid {os.getuid()}; "
-            "check APP_UID/APP_GID in .env match the syncthing user",
-            file=sys.stderr,
-        )
+    problem = check_output_dir(args.output)
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
         return 2
 
-    languages = [lang.strip() for lang in args.languages.split(",") if lang.strip()]
+    languages = parse_languages(args.languages)
     failures = 0
     for raw in args.videos:
-        try:
-            video_id = youtube.parse_video_id(raw)
-            existing = writer.find_existing(args.output, video_id)
-            if existing and not args.force:
-                print(f"skip  {existing.name} (already exists)")
-                continue
-            video = youtube.fetch_video(video_id)
-            transcript = youtube.fetch_transcript(video_id, languages)
-            note = markdown.render(video, transcript, date.today())
-            path = args.output / writer.safe_filename(video.title, video_id)
-            writer.write_atomic(path, note)
-            # A renamed video would otherwise leave the old note behind.
-            if existing and existing != path:
-                existing.unlink()
-            print(f"wrote {path.name}")
-        except (ValueError, OSError, YouTubeTranscriptApiException) as exc:
+        result = extract(raw, args.output, languages, args.force)
+        if result.status == "skip":
+            print(f"skip  {result.message} (already exists)")
+        elif result.status == "wrote":
+            print(f"wrote {result.message}")
+        else:
             failures += 1
-            print(f"error {raw}: {exc}", file=sys.stderr)
+            print(f"error {raw}: {result.message}", file=sys.stderr)
     return 1 if failures else 0
 
 

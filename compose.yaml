@@ -3,25 +3,44 @@
 # (syncthing@syncthing) shares as the Send Only folder "yt-transcripts".
 #
 #   docker compose build
-#   docker compose run --rm yt-transcripts <youtube-url> [<url> ...]
+#   docker compose up -d                                   # web UI
+#   docker compose run --rm yt-transcripts <youtube-url>   # one-shot CLI
+
+x-app: &app
+  build: .
+  image: transcript-extractor:latest
+  # Must be the syncthing user's IDs, or Syncthing can't manage the files.
+  # deploy/ct102/setup-syncthing.sh prints them; set them in .env.
+  user: "${APP_UID:?set APP_UID in .env}:${APP_GID:?set APP_GID in .env}"
+  environment:
+    TRANSCRIPT_LANGUAGES: ${TRANSCRIPT_LANGUAGES:-en}
+  volumes:
+    - ${OUTPUT_DIR:-/srv/yt-transcripts}:/output
+  # CT102 is internet-exposed; give the container as little as possible.
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
 
 services:
   yt-transcripts:
-    build: .
-    image: transcript-extractor:latest
-    # Must be the syncthing user's IDs, or Syncthing can't manage the files.
-    # deploy/ct102/setup-syncthing.sh prints them; set them in .env.
-    user: "${APP_UID:?set APP_UID in .env}:${APP_GID:?set APP_GID in .env}"
+    <<: *app
+    # One-shot command (docker compose run), not a long-running service.
+    # The profile keeps `docker compose up` from starting it.
+    profiles: [cli]
+    restart: "no"
+
+  ui:
+    <<: *app
+    entrypoint: ["python", "-m", "transcript_extractor.web"]
     environment:
       TRANSCRIPT_LANGUAGES: ${TRANSCRIPT_LANGUAGES:-en}
-    volumes:
-      - ${OUTPUT_DIR:-/srv/yt-transcripts}:/output
-    # CT102 is internet-exposed; give the container as little as possible.
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    # One-shot command (docker compose run), not a long-running service.
-    restart: "no"
+      UI_HOST: 0.0.0.0
+      UI_PORT: "8080"
+    # The UI has no login. By default it's only reachable from CT102 itself
+    # (use an SSH tunnel); set UI_BIND to a LAN address to open it wider.
+    ports:
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-8080}:8080"
+    restart: unless-stopped
