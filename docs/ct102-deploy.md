@@ -152,25 +152,37 @@ pct exec 100 -- grep 'folder id="yt-transcripts"' /home/zoro/.local/state/syncth
 pct exec 100 -- ls -la "/home/zoro/.hermes/profiles/assistant/skills/_vault/tokvault/YouTube Transcripts/"   # has .stfolder, no extra nested folder
 ```
 
-## 8. Share from ZORO to the Mac and the phone
+## 8. Share with the Mac and the phone
 
-List the devices ZORO already knows about, then add the Mac and phone to the
-new folder:
+List the devices ZORO is paired with:
 
 ```bash
 pct exec 100 -- grep -o '<device id="[^"]*" name="[^"]*"' /home/zoro/.local/state/syncthing/config.xml | sort -u
-MAC_ID=<paste the Mac's id>
-PHONE_ID=<paste the phone's id>
-pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $MAC_ID"
-pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $PHONE_ID"
 ```
+
+Set `MAC_ID` to the Mac's ID from that list, replacing the whole value, then
+share the folder with it:
+
+```bash
+MAC_ID=XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
+pct exec 100 -- su - zoro -c "/usr/bin/syncthing cli config folders yt-transcripts devices add --device-id $MAC_ID"
+pct exec 100 -- sed -n '/<folder id="yt-transcripts"/,/<\/folder>/p' /home/zoro/.local/state/syncthing/config.xml | grep 'device id'
+```
+
+The last command should list three devices: ZORO, CT102 and the Mac.
+
+Syncthing silently ignores a device ID that isn't in ZORO's device list. The
+command still succeeds, but nothing is shared. So only add the phone from
+ZORO if the phone appears in the list above.
 
 - **Mac:** the Syncthing GUI (http://127.0.0.1:8384) shows "ZORO wants to
   share folder YouTube Transcripts". Click *Add*, and on the *General* tab set
   the folder path to `/Users/tok/obsidian_vault/tokvault/YouTube Transcripts`
   before saving.
-- **Phone:** accept the folder and point it at the `YouTube Transcripts`
-  folder inside the vault.
+- **Phone:** if the phone is paired with the Mac rather than ZORO, share it
+  from the Mac. In the Mac GUI, edit *YouTube Transcripts*, open the *Sharing*
+  tab, tick the phone and save. Then accept the folder on the phone into the
+  vault's `YouTube Transcripts` folder.
 
 ## 9. Verify end to end
 
