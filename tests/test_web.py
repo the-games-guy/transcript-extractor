@@ -68,6 +68,17 @@ def test_index_lists_videos_with_obsidian_link(client):
     assert "Broken" not in client.get("/?status=saved").get_data(as_text=True)
 
 
+def test_index_shows_saved_and_published_dates(client):
+    db = client.application.config["DB"]
+    db.upsert_video(Video("dQw4w9WgXcQ", "Song", "Rick", "2009-10-25T12:00:00Z"),
+                    status="saved", note_path="Song (dQw4w9WgXcQ).md", source="manual")
+    with db.connect() as conn:
+        conn.execute("UPDATE videos SET created_at = '2026-09-30T12:00:00+00:00'")
+    body = client.get("/").get_data(as_text=True)
+    assert "Published 25 Oct 2009" in body
+    assert "30 Sep 2026" in body
+
+
 def test_retry_resets_attempts(client, worker):
     db = client.application.config["DB"]
     db.upsert_video(Video("zzzzzzzzzzz", "Broken"), status="failed", count_attempt=True)
@@ -232,3 +243,60 @@ def test_index_filters_by_channel(client):
     body = client.get("/?channel=Veritasium").get_data(as_text=True)
     assert "Physics" in body and "Song" not in body
     assert "Rick (1)" in body and "Veritasium (1)" in body
+
+
+def _add_saved(db, n, created_at=None):
+    for i in range(n):
+        vid = f"vid{i:08d}"
+        db.upsert_video(Video(vid, f"Video {i}", "Chan"), status="saved", note_path=f"{i}.md")
+        if created_at:
+            with db.connect() as conn:
+                conn.execute("UPDATE videos SET created_at = ? WHERE video_id = ?",
+                             (created_at, vid))
+
+
+def test_index_paginates(client):
+    db = client.application.config["DB"]
+    _add_saved(db, 60)
+    first = client.get("/").get_data(as_text=True)
+    assert "1–50 of 60" in first and "page=2" in first
+    second = client.get("/?page=2").get_data(as_text=True)
+    assert "51–60 of 60" in second and "page=1" in second
+    assert first.count('class="title"') == 50 and second.count('class="title"') == 10
+    # Out-of-range pages clamp to the last one.
+    assert "51–60 of 60" in client.get("/?page=9").get_data(as_text=True)
+
+
+def test_index_filters_by_saved_date(client):
+    db = client.application.config["DB"]
+    db.upsert_video(Video("aaaaaaaaaaa", "Old one", "Chan"), status="saved", note_path="a.md")
+    db.upsert_video(Video("bbbbbbbbbbb", "New one", "Chan"), status="failed")
+    with db.connect() as conn:
+        conn.execute("UPDATE videos SET created_at = '2026-08-01T12:00:00+00:00' "
+                     "WHERE video_id = 'aaaaaaaaaaa'")
+        conn.execute("UPDATE videos SET created_at = '2026-09-15T12:00:00+00:00' "
+                     "WHERE video_id = 'bbbbbbbbbbb'")
+    body = client.get("/?from=2026-09-01").get_data(as_text=True)
+    assert "New one" in body and "Old one" not in body
+    body = client.get("/?to=2026-08-01").get_data(as_text=True)  # `to` is inclusive
+    assert "Old one" in body and "New one" not in body
+    body = client.get("/?from=2026-09-30&to=2026-07-01").get_data(as_text=True)  # swapped
+    assert "Old one" in body and "New one" in body
+    # Tabs keep the date filter, and counts follow it.
+    body = client.get("/?from=2026-09-01").get_data(as_text=True)
+    assert "from=2026-09-01" in body and "Saved · 0" in body and "Failed · 1" in body
+    assert "Old one" in client.get("/?from=bad-date").get_data(as_text=True)
+
+
+def test_prune_failed_keeps_saved_and_recent(db):
+    db.upsert_video(Video("aaaaaaaaaaa", "Old fail"), status="failed")
+    db.upsert_video(Video("bbbbbbbbbbb", "Old none"), status="no_transcript")
+    db.upsert_video(Video("ccccccccccc", "Old saved"), status="saved", note_path="c.md")
+    db.upsert_video(Video("ddddddddddd", "New fail"), status="failed")
+    with db.connect() as conn:
+        conn.execute("UPDATE videos SET updated_at = '2020-01-01T00:00:00+00:00' "
+                     "WHERE video_id != 'ddddddddddd'")
+    assert db.prune_failed(0) == 0
+    assert db.prune_failed(30) == 2
+    assert set(db.get_videos(["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd"])) \
+        == {"ccccccccccc", "ddddddddddd"}

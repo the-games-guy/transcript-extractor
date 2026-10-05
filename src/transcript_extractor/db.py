@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCHEMA = """
@@ -174,8 +174,11 @@ class Database:
             ).fetchall()
         return {r["video_id"]: r for r in rows}
 
-    def recent_videos(self, limit: int = 50, status: str | None = None,
-                      channel: str | None = None) -> list[sqlite3.Row]:
+    @staticmethod
+    def _video_filters(status: str | None = None, channel: str | None = None,
+                       saved_from: str | None = None,
+                       saved_before: str | None = None) -> tuple[str, list]:
+        """WHERE clause for the videos list. Dates are UTC ISO bounds on created_at."""
         where, args = [], []
         if status:
             where.append("status = ?")
@@ -183,21 +186,46 @@ class Database:
         if channel:
             where.append("channel = ?")
             args.append(channel)
-        sql = "SELECT * FROM videos"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY updated_at DESC LIMIT ?"
-        with self.connect() as conn:
-            return conn.execute(sql, args + [limit]).fetchall()
+        if saved_from:
+            where.append("created_at >= ?")
+            args.append(saved_from)
+        if saved_before:
+            where.append("created_at < ?")
+            args.append(saved_before)
+        return (" WHERE " + " AND ".join(where) if where else ""), args
 
-    def status_counts(self, channel: str | None = None) -> dict[str, int]:
-        sql, args = "SELECT status, COUNT(*) AS n FROM videos", []
-        if channel:
-            sql += " WHERE channel = ?"
-            args.append(channel)
+    def recent_videos(self, limit: int = 50, offset: int = 0, **filters) -> list[sqlite3.Row]:
+        where, args = self._video_filters(**filters)
+        sql = f"SELECT * FROM videos{where} ORDER BY updated_at DESC, video_id LIMIT ? OFFSET ?"
         with self.connect() as conn:
-            rows = conn.execute(sql + " GROUP BY status", args)
+            return conn.execute(sql, args + [limit, offset]).fetchall()
+
+    def count_videos(self, **filters) -> int:
+        where, args = self._video_filters(**filters)
+        with self.connect() as conn:
+            return conn.execute(f"SELECT COUNT(*) FROM videos{where}", args).fetchone()[0]
+
+    def status_counts(self, **filters) -> dict[str, int]:
+        where, args = self._video_filters(**filters)
+        with self.connect() as conn:
+            rows = conn.execute(f"SELECT status, COUNT(*) AS n FROM videos{where} "
+                                "GROUP BY status", args)
             return {r["status"]: r["n"] for r in rows}
+
+    def prune_failed(self, older_than_days: int) -> int:
+        """Delete failed / no-transcript rows untouched for `older_than_days`.
+
+        Only the database rows go; no notes exist for these videos.
+        """
+        if older_than_days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)) \
+            .isoformat(timespec="seconds")
+        with self.connect() as conn:
+            return conn.execute(
+                "DELETE FROM videos WHERE status IN ('failed', 'no_transcript') "
+                "AND updated_at < ?", (cutoff,)
+            ).rowcount
 
     def channels(self) -> list[sqlite3.Row]:
         """Channels with saved transcripts, most notes first."""

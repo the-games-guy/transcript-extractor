@@ -30,6 +30,9 @@ class Settings:
     transcript_languages: list[str] = field(default_factory=lambda: ["en"])
     note_tags: list[str] = field(default_factory=lambda: ["youtube", "transcript"])
     timezone: str = "UTC"
+    # Failed / no-transcript entries are removed from the list after this many
+    # days without a retry. 0 keeps them forever.
+    failed_retention_days: int = 30
     app_username: str = "admin"
     app_password: str | None = None
     secret_key: str | None = None
@@ -51,6 +54,7 @@ class Settings:
             transcript_languages=_split_csv(env.get("TRANSCRIPT_LANGUAGES")) or ["en"],
             note_tags=_split_csv(env.get("NOTE_TAGS")) or ["youtube", "transcript"],
             timezone=env.get("APP_TIMEZONE") or env.get("TZ") or "UTC",
+            failed_retention_days=int(env.get("FAILED_RETENTION_DAYS") or 30),
             app_username=env.get("APP_USERNAME") or "admin",
             app_password=env.get("APP_PASSWORD") or None,
             secret_key=env.get("SECRET_KEY") or None,
