@@ -107,6 +107,7 @@ th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: v
 tr:last-child td { border-bottom: 0; }
 .title { font-weight: 550; }
 .sub { color: var(--muted); font-size: 13px; }
+.nowrap { white-space: nowrap; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px;
   font-weight: 600; white-space: nowrap; background: var(--bg); color: var(--muted); }
 .badge.saved { background: var(--ok-soft); color: var(--ok); }

@@ -45,18 +45,18 @@
   </div>
   {% if videos %}
   <table>
-    <thead><tr><th>Video</th><th>Status</th><th class="hide-sm">Source</th><th class="hide-sm">Updated</th><th></th></tr></thead>
+    <thead><tr><th>Video</th><th>Status</th><th class="hide-sm">Source</th><th>Saved</th><th></th></tr></thead>
     <tbody>
     {% for v in videos %}
       <tr>
         <td>
           <div class="title"><a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener">{{ v.title or v.video_id }}</a></div>
-          <div class="sub">{% if v.channel %}<a href="{{ url_for('index', channel=v.channel) }}" class="muted-link" title="Only this channel">{{ v.channel }}</a>{% endif %}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
+          <div class="sub">{% if v.channel %}<a href="{{ url_for('index', channel=v.channel) }}" class="muted-link" title="Only this channel">{{ v.channel }}</a>{% endif %}{% if v.published_at %}{% if v.channel %} · {% endif %}<span title="Published on YouTube">Published {{ v.published_at | localdate }}</span>{% endif %}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
           {% if v.error and v.status != 'saved' %}<div class="err-text">{{ v.error }}</div>{% endif %}
         </td>
         <td><span class="badge {{ v.status }}">{{ status_labels.get(v.status, v.status) }}</span></td>
         <td class="hide-sm sub">{{ v.source }}</td>
-        <td class="hide-sm sub" title="{{ v.updated_at | localtime }}">{{ v.updated_at | ago }}</td>
+        <td class="sub nowrap" title="Saved {{ v.created_at | localtime }} · updated {{ v.updated_at | ago }}">{{ v.created_at | localdate }}</td>
         <td>
           {% if v.status in ('failed', 'no_transcript') %}
           <form class="inline" method="post" action="{{ url_for('retry_video', video_id=v.video_id) }}">

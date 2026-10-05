@@ -141,6 +141,19 @@ def create_app(settings: Settings, *, start_worker: bool = True,
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(tz).strftime("%d %b %Y, %H:%M")
 
+    @app.template_filter("localdate")
+    def localdate(value) -> str:
+        if not value:
+            return ""
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00")) \
+                if isinstance(value, str) else value
+        except ValueError:
+            return value[:10]
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(tz).strftime("%d %b %Y")
+
     @app.template_filter("ago")
     def ago(value) -> str:
         if not value:

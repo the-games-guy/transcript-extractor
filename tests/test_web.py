@@ -68,6 +68,17 @@ def test_index_lists_videos_with_obsidian_link(client):
     assert "Broken" not in client.get("/?status=saved").get_data(as_text=True)
 
 
+def test_index_shows_saved_and_published_dates(client):
+    db = client.application.config["DB"]
+    db.upsert_video(Video("dQw4w9WgXcQ", "Song", "Rick", "2009-10-25T12:00:00Z"),
+                    status="saved", note_path="Song (dQw4w9WgXcQ).md", source="manual")
+    with db.connect() as conn:
+        conn.execute("UPDATE videos SET created_at = '2026-09-30T12:00:00+00:00'")
+    body = client.get("/").get_data(as_text=True)
+    assert "Published 25 Oct 2009" in body
+    assert "30 Sep 2026" in body
+
+
 def test_retry_resets_attempts(client, worker):
     db = client.application.config["DB"]
     db.upsert_video(Video("zzzzzzzzzzz", "Broken"), status="failed", count_attempt=True)
