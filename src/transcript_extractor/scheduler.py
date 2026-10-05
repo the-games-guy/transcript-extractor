@@ -68,12 +68,25 @@ class Worker:
             self._submit(_video_from_row(row), row["source"], row["watch_id"])
         for watch in self.db.list_watches():
             self.schedule(watch)
+        self.prune()
+        self.scheduler.add_job(self.prune, IntervalTrigger(hours=24, timezone=self.settings.timezone),
+                               id="prune-failed", replace_existing=True)
         self.scheduler.start()
 
     def shutdown(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         self.executor.shutdown(wait=False, cancel_futures=True)
+
+    def prune(self) -> None:
+        try:
+            removed = self.db.prune_failed(self.settings.failed_retention_days)
+        except Exception:  # noqa: BLE001 - never take the scheduler down
+            log.exception("Pruning failed entries")
+            return
+        if removed:
+            log.info("Removed %d failed entries older than %d days", removed,
+                     self.settings.failed_retention_days)
 
     # --- queue ---------------------------------------------------------------
 

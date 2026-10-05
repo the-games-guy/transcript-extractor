@@ -87,6 +87,7 @@ Everything is set in `.env` (copy `.env.example`):
 | `OBSIDIAN_VAULT_NAME` / `VAULT_FOLDER` | `tokvault` / `YouTube Transcripts`: for "open in Obsidian" links and the routine prompt. |
 | `TRANSCRIPT_LANGUAGES` | Preferred transcript languages, in order (default `en`). |
 | `NOTE_TAGS` | Tags on every note (default `youtube,transcript`). |
+| `FAILED_RETENTION_DAYS` | Failed and no-transcript entries are removed from the list after this many days without a retry (default `30`; `0` keeps them). Saved notes are never touched. |
 
 ## Channels
 

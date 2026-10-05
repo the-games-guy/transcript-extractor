@@ -23,40 +23,44 @@
     <h2 style="margin:0">Recent</h2>
     {% if pending %}<span class="sub">Fetching {{ pending }}… this page refreshes itself.</span>{% endif %}
   </div>
-  {% if channels %}
-  <form method="get" action="{{ url_for('index') }}" class="row" style="margin-bottom:12px">
+  <form method="get" action="{{ url_for('index') }}" class="row filters" style="margin-bottom:12px">
     {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {% if channels or channel %}
     <select name="channel" aria-label="Channel" style="width:auto;max-width:100%" onchange="this.form.submit()">
       <option value="">All channels</option>
       {% for c in channels %}<option value="{{ c.channel }}" {{ 'selected' if channel == c.channel }}>{{ c.channel }} ({{ c.n }})</option>{% endfor %}
       {% if channel and channel not in channels | map(attribute='channel') %}<option selected>{{ channel }}</option>{% endif %}
     </select>
-    <noscript><button class="secondary small" type="submit">Filter</button></noscript>
-    {% if channel %}<a href="{{ url_for('index', status=status) }}" class="sub">Clear</a>
-      · <a href="{{ url_for('search', channel=channel) }}" class="sub">Latest from this channel</a>{% endif %}
+    {% endif %}
+    <label class="inline-label">Saved from
+      <input type="date" name="from" value="{{ day_from or '' }}" max="{{ day_to or '' }}"></label>
+    <label class="inline-label">to
+      <input type="date" name="to" value="{{ day_to or '' }}" min="{{ day_from or '' }}"></label>
+    <button class="secondary small" type="submit">Filter</button>
+    {% if channel or day_from or day_to %}<a href="{{ url_for('index', status=status) }}" class="sub">Clear</a>{% endif %}
+    {% if channel %}· <a href="{{ url_for('search', channel=channel) }}" class="sub">Latest from this channel</a>{% endif %}
   </form>
-  {% endif %}
   <div class="tabs">
-    <a href="{{ url_for('index', channel=channel) }}" class="{{ 'active' if not status }}">All</a>
+    <a href="{{ url_for('index', **dict(args, status=None)) }}" class="{{ 'active' if not status }}">All</a>
     {% for key in ['saved', 'failed', 'no_transcript'] %}
-      <a href="{{ url_for('index', status=key, channel=channel) }}" class="{{ 'active' if status == key }}">
+      <a href="{{ url_for('index', **dict(args, status=key)) }}" class="{{ 'active' if status == key }}">
         {{ status_labels[key] }} · {{ counts.get(key, 0) }}</a>
     {% endfor %}
   </div>
   {% if videos %}
   <table>
-    <thead><tr><th>Video</th><th>Status</th><th class="hide-sm">Source</th><th>Saved</th><th></th></tr></thead>
+    <thead><tr><th>Video</th><th>Status</th><th class="hide-sm">Source</th><th class="hide-sm">Saved</th><th></th></tr></thead>
     <tbody>
     {% for v in videos %}
       <tr>
         <td>
           <div class="title"><a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener">{{ v.title or v.video_id }}</a></div>
-          <div class="sub">{% if v.channel %}<a href="{{ url_for('index', channel=v.channel) }}" class="muted-link" title="Only this channel">{{ v.channel }}</a>{% endif %}{% if v.published_at %}{% if v.channel %} · {% endif %}<span title="Published on YouTube">Published {{ v.published_at | localdate }}</span>{% endif %}{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
+          <div class="sub">{% if v.channel %}<a href="{{ url_for('index', **dict(args, channel=v.channel, status=None)) }}" class="muted-link" title="Only this channel">{{ v.channel }}</a>{% endif %}{% if v.published_at %}{% if v.channel %} · {% endif %}<span title="Published on YouTube">Published {{ v.published_at | localdate }}</span>{% endif %}<span class="show-sm">{% if v.channel or v.published_at %} · {% endif %}Saved {{ v.created_at | localdate }}</span>{% if v.note_path %} · {% set link = obsidian_link(v.note_path) %}{% if link %}<a href="{{ link }}" title="Open in Obsidian">{{ v.note_path }}</a>{% else %}{{ v.note_path }}{% endif %}{% endif %}</div>
           {% if v.error and v.status != 'saved' %}<div class="err-text">{{ v.error }}</div>{% endif %}
         </td>
         <td><span class="badge {{ v.status }}">{{ status_labels.get(v.status, v.status) }}</span></td>
         <td class="hide-sm sub">{{ v.source }}</td>
-        <td class="sub nowrap" title="Saved {{ v.created_at | localtime }} · updated {{ v.updated_at | ago }}">{{ v.created_at | localdate }}</td>
+        <td class="hide-sm sub nowrap" title="Saved {{ v.created_at | localtime }} · updated {{ v.updated_at | ago }}">{{ v.created_at | localdate }}</td>
         <td>
           {% if v.status in ('failed', 'no_transcript') %}
           <form class="inline" method="post" action="{{ url_for('retry_video', video_id=v.video_id) }}">
@@ -68,6 +72,13 @@
     {% endfor %}
     </tbody>
   </table>
+  {% if pages > 1 %}
+  <div class="row pager">
+    {% if page > 1 %}<a href="{{ url_for('index', page=page - 1, **args) }}" class="button secondary small">← Newer</a>{% endif %}
+    <span class="sub">{{ first }}–{{ first + videos | length - 1 }} of {{ total }} · page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="{{ url_for('index', page=page + 1, **args) }}" class="button secondary small">Older →</a>{% endif %}
+  </div>
+  {% endif %}
   {% else %}
     <div class="empty">Nothing here yet.</div>
   {% endif %}

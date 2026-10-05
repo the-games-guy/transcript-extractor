@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -30,6 +30,7 @@ ORDERS = {"date": "Newest", "relevance": "Relevance", "viewCount": "Most viewed"
           "rating": "Top rated"}
 DURATIONS = {"": "Any length", "short": "Under 4 min", "medium": "4-20 min",
              "long": "Over 20 min"}
+PAGE_SIZE = 50
 STATUS_LABELS = {"queued": "Queued", "processing": "Fetching", "saved": "Saved",
                  "no_transcript": "No transcript", "failed": "Failed"}
 
@@ -213,18 +214,53 @@ def create_app(settings: Settings, *, start_worker: bool = True,
 
     # --- pages ---------------------------------------------------------------
 
+    def parse_day(value: str | None) -> date | None:
+        try:
+            return date.fromisoformat((value or "").strip())
+        except ValueError:
+            return None
+
+    def day_start_utc(day: date) -> str:
+        """Midnight at the start of `day` in the app's time zone, as stored (UTC ISO)."""
+        return (datetime.combine(day, time.min, tzinfo=tz).astimezone(timezone.utc)
+                .isoformat(timespec="seconds"))
+
     @app.get("/")
     def index():
         status = request.args.get("status") or None
         if status not in STATUS_LABELS:
             status = None
         channel = (request.args.get("channel") or "").strip() or None
-        videos = db.recent_videos(limit=100, status=status, channel=channel)
-        counts = db.status_counts(channel=channel)
-        all_counts = db.status_counts() if channel else counts
+        day_from, day_to = parse_day(request.args.get("from")), parse_day(request.args.get("to"))
+        if day_from and day_to and day_from > day_to:
+            day_from, day_to = day_to, day_from
+        try:
+            page = max(1, int(request.args.get("page") or 1))
+        except ValueError:
+            page = 1
+
+        filters = {
+            "channel": channel,
+            "saved_from": day_start_utc(day_from) if day_from else None,
+            "saved_before": day_start_utc(day_to + timedelta(days=1)) if day_to else None,
+        }
+        counts = db.status_counts(**filters)
+        total = sum(counts.values()) if not status else counts.get(status, 0)
+        pages = max(1, -(-total // PAGE_SIZE))
+        page = min(page, pages)
+        videos = db.recent_videos(limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE,
+                                  status=status, **filters)
+        all_counts = db.status_counts() if any(filters.values()) else counts
         pending = sum(all_counts.get(s, 0) for s in PENDING_STATUSES)
+        # Query args that keep the current filters across tabs and pages.
+        args = {"status": status, "channel": channel,
+                "from": day_from.isoformat() if day_from else None,
+                "to": day_to.isoformat() if day_to else None}
         return render_template("index.html", videos=videos, counts=counts,
                                pending=pending, status=status, channel=channel,
+                               day_from=day_from, day_to=day_to, args=args,
+                               page=page, pages=pages, total=total,
+                               first=(page - 1) * PAGE_SIZE + 1 if videos else 0,
                                channels=db.channels())
 
     @app.post("/videos")
